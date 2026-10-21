@@ -191,6 +191,41 @@ dns:
     - https://dns.google/dns-query#%E2%9C%88%EF%B8%8F%20Proxy
     - https://dns.quad9.net/dns-query#%E2%9C%88%EF%B8%8F%20Proxy
     - https://dns.adguard-dns.com/dns-query#%E2%9C%88%EF%B8%8F%20Proxy
+    +.linkedin.com:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
+    +.linkedin.cn:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
+    +.licdn.com:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
+    +.licdn.cn:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
+    +.lnkd.in:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
+    +.linkedin-ei.com:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
+    +.linkedinlearning.com:
+    - https://1.1.1.1/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.google/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.quad9.net/dns-query#%F0%9F%92%BC%20LinkedIn
+    - https://dns.adguard-dns.com/dns-query#%F0%9F%92%BC%20LinkedIn
     +.netflix.com:
     - https://1.1.1.1/dns-query#%E2%9C%88%EF%B8%8F%20Proxy
     - https://dns.google/dns-query#%E2%9C%88%EF%B8%8F%20Proxy
@@ -768,6 +803,11 @@ proxy-groups:
   proxies:
   - ✈️ Proxy
   - DIRECT
+- name: 💼 LinkedIn
+  type: select
+  proxies:
+  - ✈️ Proxy
+  - DIRECT
 - name: ✈️ Telegram
   type: select
   proxies:
@@ -989,6 +1029,24 @@ rules:
 - DOMAIN-SUFFIX,whatsapp.com,💬 WhatsApp
 - DOMAIN-SUFFIX,whatsapp.net,💬 WhatsApp
 - DOMAIN-SUFFIX,wa.me,💬 WhatsApp
+- PROCESS-NAME,com.linkedin.android,💼 LinkedIn
+- PROCESS-NAME,com.linkedin.android.learning,💼 LinkedIn
+- PROCESS-NAME,com.linkedin.learning,💼 LinkedIn
+- RULE-SET,linkedin-services,💼 LinkedIn
+- GEOSITE,linkedin,💼 LinkedIn
+- DOMAIN-SUFFIX,linkedin.com,💼 LinkedIn
+- DOMAIN-SUFFIX,linkedin.cn,💼 LinkedIn
+- DOMAIN-SUFFIX,linkedin.at,💼 LinkedIn
+- DOMAIN-SUFFIX,licdn.com,💼 LinkedIn
+- DOMAIN-SUFFIX,licdn.cn,💼 LinkedIn
+- DOMAIN-SUFFIX,lnkd.in,💼 LinkedIn
+- DOMAIN-SUFFIX,linkedin-ei.com,💼 LinkedIn
+- DOMAIN-SUFFIX,linkedinlearning.com,💼 LinkedIn
+- DOMAIN-SUFFIX,bizographics.com,💼 LinkedIn
+- DOMAIN-SUFFIX,l-0005.dc-msedge.net,💼 LinkedIn
+- DOMAIN-SUFFIX,l-0005.l-msedge.net,💼 LinkedIn
+- DOMAIN,linkedin.sc.omtrdc.net,💼 LinkedIn
+- DOMAIN,e122475.dscg.akamaiedge.net,💼 LinkedIn
 - PROCESS-NAME,com.facebook.katana,📘 Facebook
 - PROCESS-NAME,com.facebook.lite,📘 Facebook
 - PROCESS-NAME,com.facebook.orca,📘 Facebook
@@ -1260,6 +1318,13 @@ rule-providers:
     format: yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube_No_Resolve.yaml
     path: ./ruleset/youtube-services.yaml
+    interval: 86400
+  linkedin-services:
+    type: http
+    behavior: classical
+    format: yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/LinkedIn/LinkedIn_No_Resolve.yaml
+    path: ./ruleset/linkedin-services.yaml
     interval: 86400
   google-services-main:
     type: http
