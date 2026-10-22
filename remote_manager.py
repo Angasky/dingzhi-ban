@@ -163,17 +163,18 @@ class PanelAPI:
         self.ssh, self.record, self.token = ssh, record, token
         self.cookies, self.csrf = {}, ""
         self.password, self.logged_in = password, False
+        self.legacy_csrf = False
 
     def request(self, path, payload=None, *, method=None, bearer=True):
         # Xray configuration routes are session-only, unlike /panel/api.
-        if path.lstrip("/").startswith("panel/xray/"):
+        if path.lstrip("/").startswith("panel/xray/") or (not self.token and path not in ("login", "csrf-token")):
             if not self.logged_in:
                 self.request("login", {"username": self.record["panelUser"],
                                        "password": self.password}, bearer=False)
             bearer = False
-        if not bearer and payload is not None and not self.csrf:
+        if not bearer and payload is not None and not self.csrf and not self.legacy_csrf:
             self.request("csrf-token", bearer=False)
-            if not self.csrf:
+            if not self.csrf and not self.legacy_csrf:
                 raise ValueError("3x-ui 未返回登录 CSRF 令牌，暂不能验证预设账号")
         channel = self.ssh.get_transport().open_channel(
             "direct-tcpip", ("127.0.0.1", self.record["panelPort"]), ("127.0.0.1", 0), timeout=20)
@@ -235,6 +236,9 @@ class PanelAPI:
             if len(raw) > 4 * 1024 * 1024:
                 raise ValueError("3x-ui 返回的数据超过 4 MB，请减少单面板入站数量")
             if response.status != 200:
+                if response.status == 404 and path == "csrf-token" and self.record.get("connectionMode") == "existing":
+                    self.legacy_csrf = True
+                    return None
                 raise ValueError(f"3x-ui 接口 HTTP {response.status}，请检查面板状态、访问路径和 API 令牌")
             try:
                 result = json.loads(raw)
@@ -308,7 +312,7 @@ class RemoteManager:
 
     def public(self, record):
         keys = ("id", "name", "host", "sshPort", "sshUser", "fingerprint", "domain", "panelUser",
-                "panelUrl", "panelPort", "panelPath", "panelTLS", "createdAt", "lastError")
+                "panelUrl", "panelPort", "panelPath", "panelTLS", "createdAt", "lastError", "connectionMode", "existingVerifiedAt")
         result = {key: record.get(key) for key in keys}
         jobs = [x for x in self.data["jobs"] if x["serverId"] == record["id"]]
         if jobs:
@@ -329,11 +333,15 @@ class RemoteManager:
             if existing and any(j["serverId"] == existing["id"] and j["status"] == "running" for j in self.data["jobs"]):
                 raise ValueError("安装过程中不能修改服务器连接信息")
             record = copy.deepcopy(existing) if existing else {"id": secrets.token_hex(12), "createdAt": int(time.time())}
+            record["connectionMode"] = payload.get("connectionMode", record.get("connectionMode", "install"))
+            if record["connectionMode"] not in ("install", "existing"):
+                raise ValueError("服务器接入模式无效")
+            record.pop("existingVerifiedAt", None)
             for key, value in {"host": valid_ip(payload.get("host")), "sshPort": valid_port(payload.get("sshPort", 22)),
                                "name": text(payload.get("name"), "服务器名称", maximum=80),
                                "sshUser": text(payload.get("sshUser"), "SSH 用户名", maximum=64),
                                "domain": valid_domain(payload.get("domain")),
-                               "panelUser": text(payload.get("panelUser"), "面板用户名", 3, 64)}.items():
+                               "panelUser": text(payload.get("panelUser"), "面板用户名", 1 if record["connectionMode"] == "existing" else 3, 64)}.items():
                 record[key] = value
             pin = str(payload.get("fingerprint", ""))
             if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", pin):
@@ -346,6 +354,8 @@ class RemoteManager:
                    for item in self.data["servers"]):
                 raise ValueError("该 IP 与 SSH 端口已登记，请编辑现有服务器")
             for key, label, minimum in (("sshPassword", "SSH 密码", 1), ("panelPassword", "面板密码", 12)):
+                if key == "panelPassword" and record["connectionMode"] == "existing":
+                    minimum = 1
                 if payload.get(key):
                     record[key] = self.seal(text(payload[key], label, minimum))
                 elif not record.get(key):
@@ -464,9 +474,9 @@ echo '=== DNS ==='
                 ssh.close()
 
     def panel(self, ssh, record):
-        code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -show true && ./x-ui setting -getCert true", timeout=30)
+        code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -show true && { ./x-ui setting -getCert true 2>/dev/null || true; }", timeout=30)
         if code:
-            raise ValueError("尚未找到可用的 3x-ui 设置，请先安装或读取诊断")
+            raise ValueError("未能读取 /usr/local/x-ui 面板设置，请检查安装位置、版本兼容性及 SSH 提权权限")
         settings = parse_panel_settings(output, record)
         with self.lock:
             self.record(record["id"]).update(settings)
@@ -474,9 +484,22 @@ echo '=== DNS ==='
         record.update(settings)
         code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -getApiToken true", timeout=30)
         token = re.search(r"(?m)^apiToken:[ \t]*(\S+)", output)
-        if code or not token:
+        if (code or not token) and record.get("connectionMode") != "existing":
             raise ValueError("无法读取 3x-ui API 令牌，请确认使用指定的 Teminuosi/3x-ui 分支")
-        return PanelAPI(ssh, record, token.group(1), self.secret(record, "panelPassword"))
+        return PanelAPI(ssh, record, token.group(1) if token else "", self.secret(record, "panelPassword"))
+
+    def attach_existing(self, server_id):
+        def action(api, record):
+            api.request("login", {"username": record["panelUser"],
+                                   "password": self.secret(record, "panelPassword")}, bearer=False)
+            rows = api.request("panel/api/inbounds/list")
+            if not isinstance(rows, list):
+                raise ValueError("现有面板入站接口不兼容，未完成接入；请检查 X-ui 版本")
+            with self.lock:
+                self.record(server_id)["existingVerifiedAt"] = int(time.time())
+                self.flush()
+            return {"server": self.public(self.record(server_id)), "message": f"现有面板验证成功，发现 {len(rows)} 个入站；未执行安装或更改远端配置"}
+        return self.with_panel(server_id, action)
 
     def test(self, server_id):
         record = copy.deepcopy(self.record(server_id))
@@ -501,6 +524,8 @@ echo '=== DNS ==='
             raise ValueError("请确认在该服务器安装/更新 3x-ui 并设置管理员凭证")
         with self.lock:
             record = copy.deepcopy(self.record(server_id))
+            if record.get("connectionMode") == "existing":
+                raise ValueError("现有面板接入模式不会执行安装或更新脚本")
             self.secret(record, "sshPassword")
             self.secret(record, "panelPassword")
             if self.server_locks.get(server_id, threading.Lock()).locked():

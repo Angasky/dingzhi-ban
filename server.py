@@ -2338,6 +2338,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_out(remote_manager().probe(data))
             if path == "/admin/api/servers/test":
                 return self.json_out(remote_manager().test(str(data.get("id", ""))))
+            if path == "/admin/api/servers/attach":
+                return self.json_out(remote_manager().attach_existing(str(data.get("id", ""))))
             if path == "/admin/api/servers/install":
                 return self.json_out({"ok": True, "job": remote_manager().start_install(str(data.get("id", "")), data.get("confirmed"))}, 202)
             if path == "/admin/api/servers/diagnose":

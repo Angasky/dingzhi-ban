@@ -277,6 +277,29 @@ class RemoteManagerTests(unittest.TestCase):
         self.assertEqual(api.configuration, original)
         self.assertEqual(api.rows, [])
 
+    def test_attach_existing_preserves_password_and_never_installs(self):
+        saved = self.manager.save({**self.payload, "id": self.identity,
+                                   "connectionMode": "existing", "panelUser": "a", "panelPassword": "old"})
+        self.assertEqual(saved["connectionMode"], "existing")
+        api = FakeAPI()
+        with self.with_fake_api(api):
+            result = self.manager.attach_existing(self.identity)
+        self.assertIn("验证成功", result["message"])
+        self.assertTrue(result["server"]["existingVerifiedAt"])
+        self.assertEqual([path for path, _ in api.calls], ["login", "panel/api/inbounds/list"])
+        self.assertEqual(self.manager.secret(self.manager.record(self.identity), "panelPassword"), "old")
+        with patch("remote_manager.threading.Thread") as worker, self.assertRaisesRegex(ValueError, "不会执行安装"):
+            self.manager.start_install(self.identity, True)
+        worker.assert_not_called()
+
+    def test_existing_panel_without_token_uses_session_fallback(self):
+        self.manager.save({**self.payload, "id": self.identity, "connectionMode": "existing"})
+        record = copy.deepcopy(self.manager.record(self.identity))
+        with patch.object(self.manager, "execute", side_effect=[(0, "port: 2053\nwebBasePath: /old/\ncert: \nkey: \n"), (1, "flag provided but not defined: -getApiToken")]):
+            api = self.manager.panel(Mock(), record)
+        self.assertEqual(api.token, "")
+        self.assertEqual(record["panelUrl"], "http://198.51.100.20:2053/old/")
+
     def test_relay_failure_compensates_inbound_and_config(self):
         api = FakeAPI()
         original = copy.deepcopy(api.configuration)
@@ -361,6 +384,12 @@ class PanelTunnelTests(unittest.TestCase):
 
             def do_GET(self):
                 received.append((self.path, None, None))
+                if getattr(self.server, "legacy", False):
+                    if self.path.endswith("csrf-token"):
+                        self.send_error(404)
+                        return
+                    self.reply([])
+                    return
                 self.reply("test-csrf")
 
             def do_POST(self):
@@ -385,6 +414,13 @@ class PanelTunnelTests(unittest.TestCase):
             self.assertEqual(received[2], ("/secret/panel/xray/", "session=test-session", "test-csrf"))
             api.request("panel/xray/update", {"xraySetting": "{}"})
             self.assertEqual(len(received), 4)
+            httpd.legacy = True
+            received.clear()
+            api = remote.PanelAPI(ssh, {"host": "198.51.100.1", "panelPort": 2053, "panelPath": "/secret/",
+                                       "panelUser": "admin", "connectionMode": "existing"}, "", "old-password")
+            self.assertEqual(api.request("panel/api/inbounds/list"), [])
+            self.assertEqual([row[0] for row in received], ["/secret/csrf-token", "/secret/login", "/secret/panel/api/inbounds/list"])
+            self.assertIsNone(received[1][2])
         finally:
             httpd.shutdown()
             httpd.server_close()
