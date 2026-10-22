@@ -33,12 +33,36 @@ except ImportError:
     from yaml import SafeLoader as YamlLoader, SafeDumper as YamlDumper
 
 
+class QuotedYamlString(str):
+    pass
+
+
+def _represent_quoted_yaml_string(dumper, value):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(value), style="'")
+
+
+YamlDumper.add_representer(QuotedYamlString, _represent_quoted_yaml_string)
+
+
 def yaml_load(stream):
     return yaml.load(stream, Loader=YamlLoader)
 
 
+def quote_reality_short_ids(value):
+    if isinstance(value, dict):
+        return {
+            key: (QuotedYamlString(str(item)) if key == "short-id" and item is not None
+                  else quote_reality_short_ids(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [quote_reality_short_ids(item) for item in value]
+    return value
+
+
 def yaml_dump(data):
-    return yaml.dump(data, Dumper=YamlDumper, allow_unicode=True, sort_keys=False, width=4096)
+    return yaml.dump(quote_reality_short_ids(data), Dumper=YamlDumper,
+                     allow_unicode=True, sort_keys=False, width=4096)
 
 
 ROOT = Path("/opt/mxioc-rule-manager")
@@ -838,6 +862,24 @@ def bool_value(value, default=False):
     return str(value).lower() in ("1", "true", "yes", "on")
 
 
+def normalize_reality_options(node):
+    options = node.get("reality-opts")
+    if not isinstance(options, dict) or "short-id" not in options:
+        return node
+    options = dict(options)
+    raw = options.get("short-id")
+    short_id = "" if raw is None else str(raw).strip()
+    if not short_id or short_id.lower() in ("null", "none"):
+        options.pop("short-id", None)
+    elif (len(short_id) > 16 or len(short_id) % 2
+          or not re.fullmatch(r"[0-9a-fA-F]+", short_id)):
+        raise ValueError("Reality short ID 必须是 2–16 位、长度为偶数的十六进制字符")
+    else:
+        options["short-id"] = short_id
+    node["reality-opts"] = options
+    return node
+
+
 def certificate_fingerprint(value):
     """Convert a PEM certificate carried in a share-link query into Mihomo's SHA-256 pin."""
     value = str(value or "").strip()
@@ -1028,7 +1070,9 @@ def parse_node_link(link):
         if fingerprint: config["client-fingerprint"] = fingerprint
         public_key, short_id = first(query, "pbk", "publicKey"), first(query, "sid", "shortId")
         if public_key:
-            config["reality-opts"] = {"public-key": public_key, "short-id": short_id}
+            config["reality-opts"] = {"public-key": public_key}
+            if short_id:
+                config["reality-opts"]["short-id"] = short_id
     elif scheme == "tuic":
         config.update({"uuid": username, "password": password or first(query, "password"),
                        "congestion-controller": first(query, "congestion_control", "congestion-controller", default="bbr"),
@@ -1068,7 +1112,7 @@ def parse_node_link(link):
             config["fingerprint"] = certificate_fingerprint(embedded_certificate)
     if not config.get("server") or not config.get("port"):
         raise ValueError("链接中缺少服务器地址或端口")
-    return config
+    return normalize_reality_options(config)
 
 
 def eligible_group_names(doc):
@@ -1171,7 +1215,10 @@ def parse_subscription_text(text):
             if not node.get("name") or not node.get("server") or not node.get("port"):
                 skipped.append(str(node.get("name") or "信息不完整的节点"))
                 continue
-            nodes.append(node)
+            try:
+                nodes.append(normalize_reality_options(node))
+            except ValueError as error:
+                skipped.append(f"{node.get('name', '未知节点')}（{error}）")
         return nodes, skipped
     candidates = [text]
     try:
@@ -1679,6 +1726,7 @@ def mutate_node(method, payload):
         if not isinstance(config, dict):
             raise ValueError("节点配置必须是 JSON 对象")
         config = dict(config)
+        normalize_reality_options(config)
         node_type = str(config.get("type", "")).lower()
         if node_type == "https":
             node_type = "http"
