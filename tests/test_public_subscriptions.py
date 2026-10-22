@@ -4,7 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import server
 
@@ -12,6 +12,8 @@ import server
 class PublicSubscriptionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.original_profile = getattr(server.CTX, "profile", "clash")
+        server.CTX.profile = "clash"
         self.originals = {
             name: getattr(server, name)
             for name in (
@@ -43,7 +45,67 @@ class PublicSubscriptionTests(unittest.TestCase):
         self.thread.join(timeout=3)
         for name, value in self.originals.items():
             setattr(server, name, value)
+        server.CTX.profile = self.original_profile
         self.temp.cleanup()
+
+    def test_unconfigured_traffic_does_not_advertise_fake_quota(self):
+        profile = server.list_profiles()[0]
+        port = self.httpd.server_address[1]
+        with urlopen(f"http://127.0.0.1:{port}{profile['url']}", timeout=3) as response:
+            self.assertIsNone(response.headers.get("Subscription-Userinfo"))
+        self.assertFalse(profile["traffic"]["configured"])
+
+    def test_three_client_formats_share_persisted_usage_on_get_and_head(self):
+        doc = server.minimal_profile_config()
+        doc["proxies"] = [{"name": "test", "type": "trojan", "server": "example.com",
+                            "port": 443, "password": "test-password"}]
+        server.FILES[0].write_text(server.yaml_dump(doc), encoding="utf-8")
+        profile = server.list_profiles()[0]
+        result = server.update_traffic({"upload": 1024, "download": 2048,
+                                        "total": 1048576, "expire": 1893456000})
+        self.assertEqual(result["used"], 3072)
+        server.PROFILES_CACHE = None
+        self.assertEqual(server.list_profiles()[0]["traffic"]["used"], 3072)
+        port = self.httpd.server_address[1]
+        paths = [profile["url"], f"/convert/{profile['slug']}/v2ray",
+                 f"/convert/{profile['slug']}/shadowrocket"]
+        for path in paths:
+            for method in ("GET", "HEAD"):
+                with self.subTest(path=path, method=method):
+                    with urlopen(Request(f"http://127.0.0.1:{port}{path}", method=method), timeout=3) as response:
+                        self.assertEqual(response.headers["Subscription-Userinfo"],
+                                         "upload=1024; download=2048; total=1048576; expire=1893456000")
+                        self.assertTrue(response.headers["Profile-Title"].startswith("base64:"))
+                        if method == "HEAD":
+                            self.assertEqual(response.read(), b"")
+
+    def test_usage_validation_disable_and_profile_isolation(self):
+        server.load_profiles()
+        server.update_traffic({"upload": 2, "download": 8, "total": 5})
+        self.assertTrue(server.traffic_info(server.profile_record())["exhausted"])
+        other = server.create_profile({"name": "other"})
+        self.assertFalse(other["traffic"]["configured"])
+        for invalid in (-1, 1.5, True, "100", 2 ** 53):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                server.update_traffic({"download": invalid})
+        self.assertEqual(server.traffic_info(server.profile_record())["used"], 10)
+        server.update_traffic({"upload": 1, "download": 1})
+        self.assertEqual(server.subscription_userinfo(server.profile_record()), "upload=1; download=1; total=0")
+        server.update_traffic({"enabled": False})
+        self.assertIsNone(server.subscription_userinfo(server.profile_record()))
+
+    def test_traffic_management_requires_admin_session(self):
+        port = self.httpd.server_address[1]
+        endpoint = f"http://127.0.0.1:{port}/admin/api/traffic"
+        for method in ("GET", "PUT"):
+            request = Request(endpoint, method=method, headers={
+                "Origin": f"https://127.0.0.1:{port}",
+                "X-Forwarded-Proto": "https", "Content-Type": "application/json",
+            }, data=b'{"total":100}' if method == "PUT" else None)
+            with self.subTest(method=method), self.assertRaises(HTTPError) as error:
+                urlopen(request, timeout=3)
+            self.assertEqual(error.exception.code, 401)
+        self.assertFalse(server.traffic_info(server.profile_record())["configured"])
 
     def test_legacy_clash_alias_is_disabled_after_secure_migration(self):
         profile = server.list_profiles()[0]

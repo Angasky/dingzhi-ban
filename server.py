@@ -444,7 +444,62 @@ def public_profile(record):
     return {"id": record["id"], "name": record.get("name", record["id"]),
             "protected": bool(record.get("protected")), "slug": slug,
             "customSlug": bool(record.get("customSlug", False)),
-            "url": "/sub/" + quote(slug, safe="")}
+            "url": "/sub/" + quote(slug, safe=""), "traffic": traffic_info(record)}
+
+
+def traffic_info(record):
+    stored = record.get("traffic") or {}
+    if not stored.get("enabled"):
+        return {"configured": False}
+    upload = stored.get("upload", 0)
+    download = stored.get("download", 0)
+    total = stored.get("total")
+    expire = stored.get("expire")
+    used = upload + download
+    return {"configured": True, "upload": upload, "download": download,
+            "total": total, "expire": expire, "used": used,
+            "remaining": max(0, total - used) if total is not None else None,
+            "percent": min(100, round(used / total * 100, 2)) if total else 0,
+            "exhausted": total is not None and used >= total,
+            "expired": expire is not None and expire <= int(time.time()),
+            "updatedAt": stored.get("updatedAt")}
+
+
+def update_traffic(payload):
+    with LOCK:
+        record = profile_record()
+        if payload.get("enabled") is False:
+            record.pop("traffic", None)
+        else:
+            values = {}
+            for key in ("upload", "download", "total", "expire"):
+                value = payload.get(key, 0 if key in ("upload", "download") else None)
+                if value is None and key in ("total", "expire"):
+                    values[key] = None
+                    continue
+                if type(value) is not int or not 0 <= value <= 9_007_199_254_740_991:
+                    raise ValueError("流量和到期时间必须是非负安全整数")
+                if key in ("total", "expire") and value == 0:
+                    raise ValueError("总流量或到期时间须大于零，不限请留空")
+                if key == "expire" and value > 253402300799:
+                    raise ValueError("到期时间超出有效日期范围")
+                values[key] = value
+            if values["upload"] + values["download"] > 9_007_199_254_740_991:
+                raise ValueError("已用流量超出可支持的范围")
+            record["traffic"] = {"enabled": True, **values, "updatedAt": int(time.time())}
+        save_profiles(load_profiles())
+        return traffic_info(record)
+
+
+def subscription_userinfo(record):
+    info = traffic_info(record)
+    if not info["configured"]:
+        return None
+    fields = [f"upload={info['upload']}", f"download={info['download']}",
+              f"total={info['total'] if info['total'] is not None else 0}"]
+    if info["expire"] is not None:
+        fields.append(f"expire={info['expire']}")
+    return "; ".join(fields)
 
 
 def list_profiles():
@@ -1984,6 +2039,14 @@ def mutate_dns(method, payload):
 class Handler(BaseHTTPRequestHandler):
     server_version = "MxiocManager/3"
 
+    def subscription_headers(self, record):
+        self.send_header("Profile-Update-Interval", "6")
+        self.send_header("Profile-Title", "base64:" + base64.b64encode(
+            str(record.get("name", record["id"])).encode("utf-8")).decode("ascii"))
+        userinfo = subscription_userinfo(record)
+        if userinfo is not None:
+            self.send_header("Subscription-Userinfo", userinfo)
+
     def secure_request(self):
         forwarded = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
         if forwarded:
@@ -2092,14 +2155,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/yaml; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + filename)
-            self.send_header("Profile-Update-Interval", "24")
-            self.send_header("Subscription-Userinfo", "upload=0; download=0; total=1125899906842624; expire=4102444800")
+            self.subscription_headers(record)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
         except Exception:
             self.send_error(404)
 
@@ -2111,15 +2174,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + filename)
-            self.send_header("Profile-Update-Interval", "24")
-            self.send_header("Subscription-Userinfo", "upload=0; download=0; total=1125899906842624; expire=4102444800")
+            self.subscription_headers(record)
             self.send_header("X-Mxioc-Skipped-Nodes", str(len(skipped)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
         except Exception:
             self.send_error(404)
 
@@ -2185,6 +2248,8 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 node = exported_node_link((query.get("name") or [""])[0])
                 self.svg_out(subscription_qr_svg(node["uri"]))
+            elif path == "/admin/api/traffic":
+                self.json_out(traffic_info(profile_record()))
             elif path == "/admin/api/conversions":
                 self.json_out({"formats": conversion_report()})
             elif path == "/admin/api/raw":
@@ -2316,6 +2381,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/api/profiles":
                 return self.json_out({"ok": True, "profile": update_profile(data)})
             self.select_profile()
+            if path == "/admin/api/traffic":
+                return self.json_out({"ok": True, "traffic": update_traffic(data)})
             if path == "/admin/api/nodes": mutate_node("PUT", data)
             elif path == "/admin/api/chains": mutate_chain("PUT", data)
             elif path == "/admin/api/groups": mutate_group("PUT", data)
