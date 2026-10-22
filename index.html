@@ -1,9 +1,12 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="high">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MXIOC // Terminal Control Center</title>
+<script>
+try { document.documentElement.dataset.theme = localStorage.getItem('mxioc_theme') === 'low' ? 'low' : 'high'; } catch (_) {}
+</script>
 <style>
 :root {
   --bg: #0b1120;
@@ -965,6 +968,75 @@ code {
 .usage-progress::-moz-progress-bar { background: var(--blue); }
 .client-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .client-badges span { padding: 4px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--text-dim); }
+.terminal-logo { display: none; }
+.brand-terminal { display: none; }
+.theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.theme-option { display: block; width: 100%; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); padding: 18px; text-align: left; cursor: pointer; }
+.theme-option[aria-pressed="true"] { border-color: var(--blue); background: var(--blue-soft); }
+.theme-option strong { display: block; font-size: 16px; margin: 14px 0 6px; }
+.theme-option p { color: var(--text-muted); margin: 0; line-height: 1.7; }
+.theme-preview { height: 90px; border: 1px solid var(--border); border-radius: 8px; display: grid; grid-template-columns: 24% 1fr; gap: 10px; padding: 12px; background: #0b1120; }
+.theme-preview::before { content: ''; border-radius: 4px; background: #1b2b44; }
+.theme-preview::after { content: ''; border-radius: 4px; border: 1px solid #30435c; background: #121b2c; }
+.theme-preview.high { background: repeating-linear-gradient(0deg, transparent 0 14px, #172b40 15px 16px), #070a13; border-color: #0284c7; }
+.theme-preview.high::after { border-color: #38bdf8; box-shadow: 0 0 14px rgba(56,189,248,.3); }
+.current-profile { min-width: 0; max-width: 380px; gap: 9px; }
+.current-profile strong { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.current-profile > span { color: var(--text-muted); font-size: 11px; }
+.profiles-toolbar { margin-bottom: 20px; }
+.profiles-toolbar input { flex: 1 1 220px; max-width: none; }
+.profiles-toolbar select { width: auto; max-width: 180px; }
+.profiles-pager .pagination { padding-top: 0; padding-bottom: 14px; }
+.profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr)); gap: 16px; }
+.profile-card { padding: 20px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-md); min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.profile-card.is-current { border-color: var(--blue); }
+.profile-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.profile-card-head > div { min-width: 0; }
+.profile-card h4 { margin: 0; font-size: 16px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.profile-summary { min-width: 0; flex: 1; }
+.profile-summary p { overflow-wrap: anywhere; }
+.profile-card .profile-id { margin-top: 5px; font: 11px var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.profile-card .toolbar { gap: 6px; }
+.profile-card .profile-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
+.profile-card details code { display: block; margin-top: 8px; white-space: normal; overflow-wrap: anywhere; }
+.profile-card summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.profile-usage { font-size: 12px; color: var(--text-dim); }
+
+/* The original terminal appearance is opt-in on each device; new devices default to it. */
+html[data-theme="high"] {
+  --bg: #070a13; --bg-card: #0c1220; --bg-card-hover: #111a2e;
+  --bg-sidebar: #060810; --bg-input: #060a14; --border: #162238;
+  --text-muted: #8093af; --text-dim: #a5b4c8;
+  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 10px;
+}
+html[data-theme="high"] body {
+  background-image: radial-gradient(circle at 50% 0%, rgba(56,189,248,.08), transparent 55%), linear-gradient(rgba(56,189,248,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,.03) 1px, transparent 1px);
+  background-size: 100% 100%, 36px 36px, 36px 36px;
+}
+html[data-theme="high"] .btn, html[data-theme="high"] .nav, html[data-theme="high"] .panel h3, html[data-theme="high"] .modalhead h3, html[data-theme="high"] label { font-family: var(--font-mono); }
+html[data-theme="high"] .nav { font-size: 12.5px; }
+html[data-theme="high"] .btn, html[data-theme="high"] label { font-size: 12px; }
+html[data-theme="high"] .btn.small { font-size: 11px; }
+html[data-theme="high"] label { color: var(--blue-bright); }
+html[data-theme="high"] .card { padding: 14px 16px; border-radius: var(--radius-md); }
+html[data-theme="high"] .loginbox { border-radius: var(--radius-lg); }
+html[data-theme="high"] .btn.primary { background: linear-gradient(180deg, #0284c7, #0369a1); border-color: #38bdf8; box-shadow: 0 0 12px rgba(56,189,248,.3); text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+html[data-theme="high"] .btn:hover { box-shadow: 0 0 10px rgba(56,189,248,.15); }
+html[data-theme="high"] .btn.primary:hover { background: linear-gradient(180deg, #0369a1, #075985); box-shadow: 0 0 18px rgba(56,189,248,.45); }
+html[data-theme="high"] .nav.active { border-color: var(--blue); box-shadow: 0 0 14px rgba(56,189,248,.15); }
+html[data-theme="high"] .nav.active i { text-shadow: 0 0 8px var(--blue); }
+html[data-theme="high"] .side-logo { box-shadow: 0 0 12px rgba(56,189,248,.25); }
+html[data-theme="high"] .status-indicator { animation: pulse 2s infinite ease-in-out; box-shadow: 0 0 8px rgba(16,185,129,.7); }
+html[data-theme="high"] .panel { box-shadow: 0 8px 25px rgba(0,0,0,.4); border-radius: var(--radius-md); }
+html[data-theme="high"] .panel h3 { color: var(--blue-bright); font-size: 15px; }
+html[data-theme="high"] .panel h3::before { content: '$'; }
+html[data-theme="high"] label::before { content: '>'; }
+html[data-theme="high"] .card:hover { box-shadow: 0 4px 20px rgba(0,0,0,.4), 0 0 12px rgba(56,189,248,.08); }
+html[data-theme="high"] .modal { backdrop-filter: blur(8px); }
+html[data-theme="high"] .modalbox { box-shadow: 0 25px 80px rgba(0,0,0,.8), 0 0 30px rgba(56,189,248,.15); }
+html[data-theme="high"] .login-identity { display: none; }
+html[data-theme="high"] .terminal-logo { display: block; }
+html[data-theme="high"] .brand-terminal { display: inline; }
 .backup > div:first-child { min-width: 0; }
 .backup .toolbar { flex-shrink: 0; }
 .modalbox { overscroll-behavior: contain; }
@@ -979,6 +1051,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
   .main { padding: 20px; }
 }
 @media (max-width: 768px) {
+  .theme-options { grid-template-columns: 1fr; }
   .usage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .backup { flex-wrap: wrap; }
   .side {
@@ -1040,6 +1113,8 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
   .actions { gap: 7px; }
   .actions select { flex: 1 1 100%; }
   .actions .btn { flex: 1 1 auto; }
+  .current-profile { flex: 1 1 100% !important; max-width: 100%; }
+  .current-profile strong { max-width: min(220px, 55vw); }
   .panel { padding: 16px; }
   .modal { padding: 10px; }
   .modalbox { max-height: min(96vh, 96dvh); }
@@ -1053,7 +1128,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
   .card b { font-size: 21px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 </style>
 </head>
@@ -1082,6 +1157,11 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
     </div>
     <div class="login-body">
       <div class="login-identity">MXIOC<span>订阅管理控制台</span></div>
+      <div class="ascii-logo terminal-logo"> __  _____  _____ ___  ____
+|  \/  \ \/ /_ _/ _ \/ ___|
+| |\/| |\  / | | | | | |
+| |  | |/  \ | | |_| | |___
+|_|  |_/_/\_\___\___/ \____|</div>
       <div class="login-meta">
         <div>使用管理员账号管理节点与订阅</div>
         <div>会话有效期 <b>12 小时</b></div>
@@ -1102,22 +1182,24 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
     <div class="side-brand">
       <div class="side-logo">M</div>
       <div>
-        <h1>MXIOC</h1>
+        <h1>MXIOC<span class="brand-terminal"> // CLI</span></h1>
         <p>订阅管理控制台</p>
       </div>
     </div>
     <div class="nav-group">
       <div class="nav-section-title">工作空间</div>
       <button class="nav active" type="button" data-page="overview" title="总览"><i>⌂</i><span>总览</span></button>
+      <button class="nav" type="button" data-page="profiles" title="订阅管理"><i>▦</i><span>订阅管理</span></button>
       <button class="nav" type="button" data-page="nodes" title="节点管理"><i>◆</i><span>节点管理</span></button>
       <button class="nav" type="button" data-page="chains" title="链式代理"><i>⇄</i><span>链式代理</span></button>
       <button class="nav" type="button" data-page="groups" title="策略组管理"><i>◫</i><span>策略组管理</span></button>
       <button class="nav" type="button" data-page="rules" title="路由规则"><i>≡</i><span>路由规则</span></button>
       <button class="nav" type="button" data-page="dns" title="DNS 分流"><i>◎</i><span>DNS 分流</span></button>
-      <button class="nav" type="button" data-page="subscriptions" title="订阅工具"><i>↗</i><span>订阅工具</span></button>
+      <button class="nav" type="button" data-page="subscriptions" title="订阅导入"><i>↗</i><span>订阅导入</span></button>
       <button class="nav" type="button" data-page="traffic" title="流量与到期"><i>◴</i><span>流量与到期</span></button>
       <button class="nav" type="button" data-page="raw" title="原始配置"><i>{ }</i><span>原始配置</span></button>
       <button class="nav" type="button" data-page="system" title="账号与安全"><i>⚿</i><span>账号与安全</span></button>
+      <button class="nav" type="button" data-page="settings" title="设置"><i>◐</i><span>设置</span></button>
       <button class="nav" type="button" data-page="maintenance" title="升级与卸载"><i>⚙</i><span>升级与卸载</span></button>
     </div>
     <div class="side-status">
@@ -1134,8 +1216,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
         <p id="subtitle">综合订阅配置状态</p>
       </div>
       <div class="actions">
-        <select id="profileSelect" title="选择当前编辑的订阅配置"></select>
-        <button id="manageProfiles" class="btn">[ ⇄ 订阅管理 ]</button>
+        <button id="manageProfiles" class="btn current-profile" title="进入订阅管理并切换配置"><span>当前订阅</span><strong id="currentProfileName">—</strong><span>切换 ↗</span></button>
         <button id="refresh" class="btn">[ ⟳ 刷新 ]</button>
         <button id="importNode" class="btn hidden">[ 🔗 批量链接导入 ]</button>
         <button id="add" class="btn primary hidden">[ ＋ 新增 ]</button>
@@ -1178,6 +1259,8 @@ const S = {
   filters: {},
   tablePages: {},
   ruleAction: '',
+  profileFilter: 'all',
+  profileSort: 'default',
   updatePrompted: ''
 };
 
@@ -1361,9 +1444,16 @@ async function confirmSoftwareUpdate(force = false) {
 async function loadProfiles() {
   let d = await api('/profiles');
   S.profiles = d.profiles;
-  if (!S.profiles.some(x => x.id === S.profile)) S.profile = S.profiles[0]?.id || 'clash';
+  if (!S.profiles.some(x => x.id === S.profile)) {
+    S.profile = S.profiles[0]?.id || 'clash';
+    S.data = null;
+    S.nodeSelection.clear();
+    S.filters = {profiles:S.filters.profiles || ''};
+    S.tablePages = {profiles:S.tablePages.profiles || 1};
+    S.ruleAction = '';
+  }
   localStorage.setItem('mxioc_profile', S.profile);
-  $('profileSelect').innerHTML = S.profiles.map(x => `<option value="${esc(x.id)}" ${x.id === S.profile ? 'selected' : ''}>${esc(x.name)} · ${esc(x.id)}</option>`).join('');
+  $('currentProfileName').textContent = S.profiles.find(x => x.id === S.profile)?.name || '未选择订阅';
 }
 
 async function reload(render = true) {
@@ -1378,6 +1468,7 @@ async function reload(render = true) {
 
 const pageInfo = {
   overview: ['总览', '综合订阅配置状态与核心运行指标'],
+  profiles: ['订阅管理', '搜索、切换和管理所有订阅配置与分享链接'],
   nodes: ['节点管理', '节点的新增、修改、删除与策略组同步'],
   chains: ['链式代理', '选择入口和出口节点组成两跳中继代理链路'],
   groups: ['策略组管理', '管理业务分组、节点列表和自动选择顺序'],
@@ -1387,6 +1478,7 @@ const pageInfo = {
   traffic: ['流量与到期', '按订阅管理流量额度、已用量与有效期，统一同步至三个客户端'],
   raw: ['原始配置', '直接编辑并校验底层 Clash / Mihomo YAML'],
   system: ['账号与安全', '修改管理员用户名、密码以及查看历史配置备份'],
+  settings: ['设置', '选择适合当前设备的界面主题'],
   maintenance: ['升级与卸载', '检查升级、重新安装或安全卸载管理后台']
 };
 
@@ -1404,7 +1496,7 @@ async function go(page) {
   $('add').classList.toggle('hidden', !['nodes', 'chains', 'groups', 'rules', 'dns'].includes(page));
   $('importNode').classList.toggle('hidden', page !== 'nodes');
   if (!S.profiles.length) await loadProfiles();
-  if (!S.data) await reload(false);
+  if (!S.data && !['profiles', 'settings'].includes(page)) await reload(false);
   if (S.page !== page) return;
   draw();
 }
@@ -1416,7 +1508,7 @@ function draw() {
     $('content').innerHTML = `<section class="panel"><h3>页面加载失败</h3><p class="muted">${esc(error.message)}</p><button class="btn" onclick="draw()">重试</button></section>`;
   };
   try {
-    Promise.resolve(({ overview, nodes, chains, groups, rules, dns, subscriptions, traffic, raw, system, maintenance }[page] || overview)()).catch(failed);
+    Promise.resolve(({ overview, profiles, nodes, chains, groups, rules, dns, subscriptions, traffic, raw, system, settings, maintenance }[page] || overview)()).catch(failed);
   } catch (error) { failed(error); }
 }
 
@@ -1462,6 +1554,103 @@ function formatBytes(value) {
   const index = value > 0 ? Math.min(5, Math.floor(Math.log(value) / Math.log(1024))) : 0;
   return (value / 1024 ** index).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' ' + units[index];
 }
+
+function setTheme(theme) {
+  if (!['high', 'low'].includes(theme)) return;
+  document.documentElement.dataset.theme = theme;
+  let persisted = true;
+  try { localStorage.setItem('mxioc_theme', theme); } catch (_) { persisted = false; }
+  document.querySelectorAll('[data-theme-choice]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.themeChoice === theme)));
+  notice(persisted ? `已切换为${theme === 'high' ? '高配' : '低配'}主题` : '主题已切换，当前浏览器未允许保存偏好');
+}
+
+function settings() {
+  const theme = document.documentElement.dataset.theme;
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><h3>外观与性能</h3><span class="pill">当前设备</span></div>
+    <p class="muted">首次使用默认高配主题。选择会保存在当前浏览器，不影响其他设备；切换立即生效。</p>
+    <div class="theme-options">
+      <button type="button" class="theme-option" data-theme-choice="high" aria-pressed="${theme === 'high'}" onclick="setTheme('high')">
+        <span class="theme-preview high" aria-hidden="true"></span><strong>高配主题 · 经典终端</strong><p>恢复原来的网格背景、蓝色光晕、终端字体和磨砂弹窗。适合性能较好的设备。</p>
+      </button>
+      <button type="button" class="theme-option" data-theme-choice="low" aria-pressed="${theme === 'low'}" onclick="setTheme('low')">
+        <span class="theme-preview" aria-hidden="true"></span><strong>低配主题 · 轻量界面</strong><p>保留当前简洁界面，减少阴影和动画，关闭背景模糊。适合手机、旧电脑与省电场景。</p>
+      </button>
+    </div><div class="note">两套主题拥有相同的功能和分页优化。系统开启“减少动态效果”时，高配主题也会降低动画。</div>
+  </section>`;
+}
+
+function profiles() {
+  const q = S.filters.profiles || '';
+  let rows = S.profiles.filter(p => `${p.name} ${p.id}`.toLowerCase().includes(q.toLowerCase()));
+  if (S.profileFilter === 'current') rows = rows.filter(p => p.id === S.profile);
+  if (S.profileFilter === 'configured') rows = rows.filter(p => p.traffic?.configured);
+  if (S.profileFilter === 'expired') rows = rows.filter(p => p.traffic?.expired);
+  if (S.profileSort === 'name') rows.sort((a,b) => a.name.localeCompare(b.name, 'zh-CN', {numeric:true}));
+  if (S.profileSort === 'latest') rows.reverse();
+  const page = tableSlice(rows, 'profiles');
+  const current = S.profiles.find(p => p.id === S.profile);
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>我的订阅</h3><p class="muted">共 ${S.profiles.length} 份订阅 · 当前：${esc(current?.name || '未选择')}</p></div>
+    <button class="btn primary" onclick="profileCreate()">＋ 新建订阅</button></div>
+    <div class="toolbar profiles-toolbar"><input id="search" aria-label="搜索订阅" placeholder="搜索订阅名称或标识…" value="${esc(q)}">
+      <select id="profileFilter" aria-label="筛选订阅"><option value="all">全部订阅</option><option value="current">当前订阅</option><option value="configured">已设置流量</option><option value="expired">已到期</option></select>
+      <select id="profileSort" aria-label="订阅排序"><option value="default">默认顺序</option><option value="latest">最近创建优先</option><option value="name">名称排序</option></select></div>
+    <div class="profiles-pager">${pagination(page)}</div><div class="profile-grid">${page.rows.map(p => {
+      const id = encodeURIComponent(p.id).replace(/'/g, '%27'), t = p.traffic || {}, active = p.id === S.profile;
+      return `<article class="profile-card ${active ? 'is-current' : ''}" data-profile-id="${esc(p.id)}"><div class="profile-card-head"><div><h4 title="${esc(p.name)}">${esc(p.name)}</h4><div class="profile-id">${esc(p.id)}</div></div>
+        ${active ? '<span class="pill">当前订阅</span>' : p.protected ? '<span class="pill">主订阅</span>' : ''}</div>
+        <div class="profile-usage">${t.configured ? `已用 ${formatBytes(t.used)} · 总额 ${formatBytes(t.total)}<br>${t.expire ? '到期 ' + esc(new Date(t.expire * 1000).toLocaleDateString('zh-CN')) : '长期有效'}${t.expired ? ' · 已到期' : t.exhausted ? ' · 额度已用尽' : ''}` : '尚未设置流量额度'}</div>
+        <details><summary>查看订阅地址</summary><code>${esc(location.origin + p.url)}</code></details>
+        <div class="toolbar"><button class="btn primary small" onclick="useProfile('${id}')">进入配置</button><button class="btn small" onclick="useProfile('${id}','traffic')">流量设置</button>
+          <button class="btn small" onclick="profileCopyLink('${id}')" title="复制 Clash / Mihomo 订阅地址">复制链接</button><button class="btn small" onclick="profileClientLinks('${id}')">订阅 / 二维码</button></div>
+        <div class="toolbar profile-actions"><button class="btn small" onclick="profileEdit('${id}')">重命名 / 设置</button><button class="btn small" onclick="profileDuplicate('${id}')">复制为新订阅</button>
+          ${p.protected ? '<span class="hint">主订阅不可删除</span>' : `<button class="btn small danger" onclick="profileDelete('${id}')">删除</button>`}</div>
+      </article>`;
+    }).join('') || '<div class="empty">没有找到匹配的订阅</div>'}</div>${pagination(page)}</section>`;
+  $('profileFilter').value = S.profileFilter;
+  $('profileSort').value = S.profileSort;
+  $('profileFilter').onchange = e => { S.profileFilter = e.target.value; S.tablePages.profiles = 1; profiles(); };
+  $('profileSort').onchange = e => { S.profileSort = e.target.value; S.tablePages.profiles = 1; profiles(); };
+  bindSearch('profiles', profiles);
+}
+
+async function useProfile(encoded, page = 'nodes') {
+  const id = decodeURIComponent(encoded), profile = S.profiles.find(p => p.id === id);
+  if (!profile) return notice('该订阅已不存在，请刷新列表');
+  try {
+    if (S.profile !== id) {
+      S.profile = id;
+      localStorage.setItem('mxioc_profile', id);
+      S.nodeSelection.clear();
+      S.data = null;
+      S.filters = {profiles:S.filters.profiles || ''};
+      S.tablePages = {profiles:S.tablePages.profiles || 1};
+      S.ruleAction = '';
+    }
+    $('currentProfileName').textContent = profile.name;
+    closeModal();
+    if (!S.data) await reload(false);
+    if (S.profile !== id) return;
+    await go(page);
+    notice('当前订阅：' + profile.name);
+  } catch (error) { notice('切换失败：' + error.message); }
+}
+
+function profileCopyLink(encoded) {
+  const p = S.profiles.find(x => x.id === decodeURIComponent(encoded));
+  if (p) copyText(location.origin + p.url);
+}
+
+function profileClientLinks(encoded) {
+  const p = S.profiles.find(x => x.id === decodeURIComponent(encoded));
+  if (!p) return;
+  const converted = '/convert/' + encodeURIComponent(p.slug);
+  openModal('客户端订阅 · ' + p.name, `<p class="muted">选择你的客户端，复制地址、下载配置或扫码导入。V2Ray 与 Shadowrocket 仅包含兼容的单节点。</p>
+    ${subscriptionRow('Clash / Mihomo', '完整节点、策略组、规则与 DNS', location.origin + p.url, p.url)}
+    ${subscriptionRow('V2Ray / v2rayN', 'Base64 节点订阅', location.origin + converted + '/v2ray', converted + '/v2ray')}
+    ${subscriptionRow('Shadowrocket', '小火箭节点订阅', location.origin + converted + '/shadowrocket', converted + '/shadowrocket')}`);
+}
+
+function profileDuplicate(encoded) { profileCreate(decodeURIComponent(encoded)); }
 
 function trafficSummary() {
   const t = S.data.profile?.traffic || { configured: false };
@@ -2949,32 +3138,19 @@ function downloadNodeLink(filename, uri) {
   notice('节点连接已导出');
 }
 
-function profileManager() {
-  let rows = S.profiles.map(p => {
-    let url = location.origin + p.url;
-    return `
-    <div class="backup">
-      <div>
-        <b>${esc(p.name)}</b>
-        <div class="muted">LINK_SLUG: <code>${esc(p.slug)}</code> · ${p.customSlug ? '<span style="color:var(--danger)">高风险自定义</span>' : '<span style="color:var(--green)">随机安全路径</span>'}</div>
-        <code>${esc(url)}</code>
-      </div>
-      <div class="toolbar">
-        <button class="btn small" onclick="copyText('${esc(url)}')">[ 复制 ]</button>
-        <button class="btn small" onclick="profileEdit('${encodeURIComponent(p.id)}')">[ 修改 ]</button>
-        ${p.protected ? '' : `<button class="btn small danger" onclick="profileDelete('${encodeURIComponent(p.id)}')">[ 删除 ]</button>`}
-      </div>
-    </div>`;
-  }).join('');
+function profileManager() { return go('profiles'); }
 
-  openModal('PROFILES // 订阅配置管理', `
+function profileCreate(templateId = 'blank') {
+  const template = S.profiles.find(p => p.id === templateId);
+  if (templateId !== 'blank' && !template) return notice('来源订阅已不存在，请刷新列表');
+  openModal(template ? '复制订阅' : '新建订阅', `
   <form id="createProfile">
     <fieldset class="section">
       <legend>NEW_PROFILE // 创建新订阅配置</legend>
       <div class="grid">
         <div>
           <label>订阅显示名称</label>
-          <input id="profileName" required placeholder="例如 专用工作订阅">
+          <input id="profileName" required placeholder="例如 专用工作订阅" value="${esc(template ? template.name + ' 副本' : '')}">
         </div>
         <div>
           <label>订阅链接安全模式</label>
@@ -2991,20 +3167,14 @@ function profileManager() {
         </div>
         <div class="span2">
           <label>配置模板来源</label>
-          <select id="profileTemplate">
-            <option value="blank">创建空白配置（包含最小可运行核心架构）</option>
-            ${S.profiles.map(p => `<option value="${esc(p.id)}">复制“${esc(p.name)}”作为模板</option>`).join('')}
-          </select>
+          <input id="profileTemplate" type="hidden" value="${esc(templateId)}">
+          <div class="note">${template ? '复制“' + esc(template.name) + '”的节点、策略组和规则；流量额度独立设置。' : '创建空白配置，包含内置策略组、规则和 DNS 模板。需要复制配置时，请使用对应订阅卡片上的“复制为新订阅”。'}</div>
         </div>
       </div>
       <div id="formError" class="error"></div>
       <button class="btn primary" style="margin-top:14px;">[ ＋ 创建并初始化该订阅 ]</button>
     </fieldset>
-  </form>
-  <section class="section" style="margin-top:18px;">
-    <h4 style="margin:0 0 12px 0;font-family:var(--font-mono);font-size:13px;color:var(--blue);">ACTIVE_PROFILES // 当前已有订阅</h4>
-    ${rows}
-  </section>`);
+  </form>`);
 
   $('createProfile').onsubmit = async e => {
     e.preventDefault();
@@ -3017,6 +3187,12 @@ function profileManager() {
       }));
       S.profile = d.profile.id;
       localStorage.setItem('mxioc_profile', S.profile);
+      S.filters = {};
+      S.tablePages = {};
+      S.profileFilter = 'all';
+      S.profileSort = 'latest';
+      S.ruleAction = '';
+      S.nodeSelection.clear();
       S.data = null;
       closeModal();
       await loadProfiles();
@@ -3086,7 +3262,13 @@ async function profileDelete(encoded) {
   if (!confirm(`确认永久删除订阅“${p.name}”？配置文件将被清除，但历史自动快照将完整保留。`)) return;
   try {
     await api('/profiles', jsonOpt('DELETE', { id }));
-    if (S.profile === id) S.profile = 'clash';
+    if (S.profile === id) {
+      S.profile = 'clash';
+      S.nodeSelection.clear();
+      S.filters = {profiles:S.filters.profiles || ''};
+      S.tablePages = {profiles:S.tablePages.profiles || 1};
+      S.ruleAction = '';
+    }
     localStorage.setItem('mxioc_profile', S.profile);
     S.data = null;
     closeModal();
@@ -3275,20 +3457,14 @@ document.addEventListener('keydown', e => {
 
 $('logout').onclick = () => logout(true);
 $('manageProfiles').onclick = profileManager;
-$('profileSelect').onchange = async () => {
-  S.profile = $('profileSelect').value;
-  localStorage.setItem('mxioc_profile', S.profile);
-  S.nodeSelection.clear();
-  S.data = null;
-  S.tablePages = {};
-  S.filters = {};
-  S.ruleAction = '';
-  await reload();
-  notice('已切换当前订阅配置');
-};
 $('refresh').onclick = async () => {
   try {
-    await reload();
+    if (S.page === 'profiles') {
+      await loadProfiles();
+      if (S.page === 'profiles') profiles();
+    } else {
+      await reload();
+    }
     notice('配置数据已同步刷新');
   } catch (e) {
     alert(e.message);
