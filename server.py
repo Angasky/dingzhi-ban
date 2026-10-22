@@ -882,6 +882,26 @@ def normalize_ipv6_authority(link):
     return f"{prefix}://{authority}{suffix}"
 
 
+SHARE_LINK_PATTERN = re.compile(
+    r"(?i)(?:vless|tuic|hysteria2|hy2|trojan|ss|vmess|socks5|socks|https?)://[^\s<>]+"
+)
+
+
+def extract_node_links(value):
+    """Extract node share links from a multiline paste without splitting query data."""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("请至少粘贴一条节点链接")
+    links = []
+    for line in text.splitlines():
+        for link in SHARE_LINK_PATTERN.findall(line.strip().strip("`")):
+            # A link copied from Markdown may retain the closing parenthesis or punctuation.
+            links.append(link.rstrip("，；;。]}>)]\"'"))
+    if not links:
+        raise ValueError("没有找到可识别的节点分享链接")
+    return links
+
+
 def parse_node_link(link):
     link = str(link or "").strip().strip('"\'').replace("\\://", "://").replace("\\@", "@").replace("\\.", ".")
     if not link or "://" not in link:
@@ -1224,6 +1244,41 @@ def import_subscription(payload):
     write_config(doc, "subscription-import")
     return {"added": len(added), "replaced": len(replaced), "skipped": len(skipped),
             "names": (added + replaced)[:30]}
+
+
+def add_node_to_groups(doc, name):
+    for group in doc.get("proxy-groups", []):
+        if (group.get("type") == "select"
+                and group.get("name") not in NON_NODE_GROUPS
+                and name not in (group.get("proxies", []) or [])):
+            group.setdefault("proxies", []).append(name)
+
+
+def import_node_links(payload):
+    links = extract_node_links(payload.get("links") or payload.get("link", ""))
+    doc = read_config()
+    nodes = doc.setdefault("proxies", [])
+    used = {str(node.get("name", "")) for node in nodes}
+    added, renamed, failed = [], [], []
+    add_to_groups = bool(payload.get("addToGroups", True))
+    for number, link in enumerate(links, start=1):
+        try:
+            node = parse_node_link(link)
+            original_name = str(node.get("name") or "导入节点")
+            node["name"] = unique_node_name(original_name, used)
+            used.add(node["name"])
+            if node["name"] != original_name:
+                renamed.append({"from": original_name, "to": node["name"]})
+            nodes.append(node)
+            if add_to_groups:
+                add_node_to_groups(doc, node["name"])
+            added.append(node["name"])
+        except Exception as exc:
+            failed.append({"line": number, "reason": str(exc)})
+    if added:
+        write_config(doc, "node-link-batch-import")
+    return {"total": len(links), "added": len(added), "failed": failed,
+            "renamed": renamed, "names": added[:50]}
 
 
 def endpoint(node):
@@ -1641,11 +1696,7 @@ def mutate_node(method, payload):
                 raise ValueError("节点名称已存在")
             nodes.append(config)
             if payload.get("addToGroups", True):
-                for group in doc.get("proxy-groups", []):
-                    if (group.get("type") == "select"
-                            and group.get("name") not in NON_NODE_GROUPS
-                            and name not in (group.get("proxies", []) or [])):
-                        group.setdefault("proxies", []).append(name)
+                add_node_to_groups(doc, name)
         else:
             index = next((i for i, x in enumerate(nodes) if x.get("name") == old_name), -1)
             if index < 0:
@@ -2006,8 +2057,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_out({"ok": True, **add_country_flags(data)})
             elif path == "/admin/api/chains": mutate_chain("POST", data)
             elif path == "/admin/api/import-node":
-                config = parse_node_link(data.get("link", ""))
-                mutate_node("POST", {"config": config, "addToGroups": data.get("addToGroups", True)})
+                return self.json_out({"ok": True, **import_node_links(data)})
             elif path == "/admin/api/import-subscription/preview":
                 return self.json_out(subscription_preview(data))
             elif path == "/admin/api/import-subscription":

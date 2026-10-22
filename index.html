@@ -972,7 +972,7 @@ code {
         <select id="profileSelect" title="选择当前编辑的订阅配置"></select>
         <button id="manageProfiles" class="btn">[ ⇄ 订阅管理 ]</button>
         <button id="refresh" class="btn">[ ⟳ 刷新 ]</button>
-        <button id="importNode" class="btn hidden">[ 🔗 链接导入 ]</button>
+        <button id="importNode" class="btn hidden">[ 🔗 批量链接导入 ]</button>
         <button id="add" class="btn primary hidden">[ ＋ 新增 ]</button>
         <button id="logout" class="btn danger">[ ⎋ 退出 ]</button>
       </div>
@@ -2499,26 +2499,32 @@ function dnsModal(encoded) {
 }
 
 function importNodeModal() {
-  openModal('IMPORT_NODE // 一键通过链接导入单个节点', `
+  openModal('IMPORT_NODES // 批量通过链接导入节点', `
   <form id="editForm">
-    <label>NODE_SHARE_LINK // 节点分享链接</label>
-    <textarea id="nodeLink" required style="min-height:120px" placeholder="粘贴 vless://、tuic://、hysteria2://、hy2://、trojan://、ss://、vmess://、socks5://、socks://、http:// 或 https:// 链接"></textarea>
-    <div class="note">// 系统将自动解析认证信息、TLS / Reality 公钥、SNI、ALPN、流控和带宽；SOCKS5、HTTP、HTTPS 均支持无认证及用户名/密码认证。</div>
+    <label>NODE_SHARE_LINKS // 节点分享链接</label>
+    <textarea id="nodeLink" required style="min-height:220px" placeholder="每行粘贴一条链接：&#10;vless://...&#10;tuic://...&#10;hysteria2://...&#10;&#10;支持 vless、tuic、hysteria2 / hy2、trojan、ss、vmess、socks5、http、https。"></textarea>
+    <div class="note">// 支持一次粘贴多条链接：每行一条，空行会忽略。系统会逐条解析认证信息、TLS / Reality 公钥、SNI、ALPN、流控和带宽；同名节点将自动追加序号，不会覆盖已有节点。</div>
     <label class="inlinecheck">
       <input id="importAll" type="checkbox" checked>
       <span>自动加入所有业务代理策略组（广告拦截组除外）</span>
     </label>
     <div id="formError" class="error"></div>
-    <button class="btn primary" style="margin-top:16px;">[ ⚡ 立即解析并写入 YAML ]</button>
+    <div id="importResult" class="note hidden" style="margin-top:14px;"></div>
+    <button class="btn primary" style="margin-top:16px;">[ ⚡ 批量解析并写入 YAML ]</button>
   </form>`);
 
   $('editForm').onsubmit = async e => {
     e.preventDefault();
     try {
-      await api('/import-node', jsonOpt('POST', { link: val('nodeLink'), addToGroups: on('importAll') }));
-      closeModal();
+      let result = await api('/import-node', jsonOpt('POST', { links: val('nodeLink'), addToGroups: on('importAll') }));
       await reload();
-      notice('节点链接已解析导入并生成配置');
+      let details = [];
+      if (result.renamed?.length) details.push(`同名自动改名：${result.renamed.map(x => `${esc(x.from)} → ${esc(x.to)}`).join('；')}`);
+      if (result.failed?.length) details.push(`未导入 ${result.failed.length} 条：${result.failed.map(x => `第 ${x.line} 条 ${esc(x.reason)}`).join('；')}`);
+      let box = $('importResult');
+      box.classList.remove('hidden');
+      box.innerHTML = `<b>IMPORT_RESULT // 已识别 ${result.total} 条，成功导入 ${result.added} 条</b>${details.length ? `<br>${details.join('<br>')}` : '<br>全部链接已成功导入。'}`;
+      notice(`批量导入完成：${result.added} 条成功${result.failed?.length ? `，${result.failed.length} 条未导入` : ''}`);
     } catch (err) {
       $('formError').textContent = err.message;
     }
