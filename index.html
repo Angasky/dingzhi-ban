@@ -11,7 +11,7 @@
   --bg-card-hover: #111a2e;
   --bg-sidebar: #060810;
   --bg-input: #060a14;
-  --border: #162238;
+  --border: #233249;
   --border-focus: #38bdf8;
   --border-glow: rgba(56, 189, 248, 0.25);
   --blue: #38bdf8;
@@ -20,8 +20,8 @@
   --blue-soft: rgba(56, 189, 248, 0.12);
   --cyan: #22d3ee;
   --text: #f1f5f9;
-  --text-muted: #64748b;
-  --text-dim: #94a3b8;
+  --text-muted: #94a3b8;
+  --text-dim: #b9c7d8;
   --green: #10b981;
   --green-soft: rgba(16, 185, 129, 0.12);
   --amber: #f59e0b;
@@ -46,7 +46,7 @@ body {
   background-size: 100% 100%, 36px 36px, 36px 36px;
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.5;
   letter-spacing: 0.01em;
   min-height: 100vh;
@@ -59,6 +59,56 @@ body {
 
 .hidden { display: none !important; }
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .nav:focus-visible {
+  outline: 2px solid var(--blue-bright);
+  outline-offset: 2px;
+}
+
+.boot {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.boot-card {
+  width: min(380px, 100%);
+  padding: 30px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .4);
+  text-align: center;
+}
+.boot-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 18px;
+  border: 1px solid var(--blue);
+  border-radius: 12px;
+  color: var(--blue-bright);
+  font: 800 22px var(--font-mono);
+  box-shadow: 0 0 22px var(--border-glow);
+}
+.boot-title { margin: 0 0 6px; font: 700 16px var(--font-mono); }
+.boot-status { margin: 0 0 18px; color: var(--text-dim); }
+.boot-progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+.boot-progress::after {
+  content: '';
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--blue);
+  animation: boot-scan 1.3s ease-in-out infinite alternate;
+}
+@keyframes boot-scan { to { transform: translateX(190%); } }
+.boot.failed .boot-progress { display: none; }
 
 /* ==================== LOGIN TERMINAL ==================== */
 .login {
@@ -72,7 +122,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   width: min(460px, 100%);
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: 14px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7), 0 0 25px rgba(56, 189, 248, 0.08);
   padding: 0;
   overflow: hidden;
@@ -149,6 +199,7 @@ input, select, textarea {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  min-height: 38px;
   padding: 9px 12px;
   outline: none;
   color: var(--text);
@@ -185,6 +236,7 @@ textarea {
   border-radius: var(--radius-sm);
   background: #0b1322;
   padding: 8px 14px;
+  min-height: 36px;
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -228,6 +280,7 @@ textarea {
 }
 .btn.small {
   padding: 4px 8px;
+  min-height: 29px;
   font-size: 11px;
 }
 .btn:disabled {
@@ -318,10 +371,12 @@ textarea {
   user-select: none;
 }
 .nav {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  min-height: 41px;
+  padding: 9px 12px;
   margin: 2px 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -329,6 +384,8 @@ textarea {
   font-family: var(--font-mono);
   font-size: 12.5px;
   border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
   transition: all 0.15s ease;
 }
 .nav:hover {
@@ -380,15 +437,15 @@ textarea {
 .main {
   min-width: 0;
   flex: 1;
-  padding: 22px 28px;
+  padding: 28px clamp(18px, 3vw, 42px);
 }
 .top {
   display: flex;
   justify-content: space-between;
   gap: 16px;
   align-items: center;
-  margin-bottom: 18px;
-  padding-bottom: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
   border-bottom: 1px solid var(--border);
 }
 .top-title-area {
@@ -405,7 +462,7 @@ textarea {
   color: var(--text-muted);
 }
 .top h2 {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
   margin: 0;
   color: var(--text);
@@ -430,21 +487,22 @@ textarea {
   align-items: center;
   flex-wrap: wrap;
 }
+.actions select { width: min(220px, 100%); }
 .toolbar input { max-width: 320px; }
 .toolbar select { max-width: 200px; }
 
 /* ==================== HUD CARDS ==================== */
 .cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
 }
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 14px 16px;
+  border-radius: 12px;
+  padding: 18px 20px;
   position: relative;
   overflow: hidden;
   transition: all 0.15s ease;
@@ -493,15 +551,17 @@ textarea {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 18px 20px;
-  margin-bottom: 16px;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.22);
 }
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
@@ -626,7 +686,7 @@ code {
 }
 .modalbox {
   width: min(800px, 100%);
-  max-height: 90vh;
+  max-height: min(90vh, 90dvh);
   overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid rgba(56, 189, 248, 0.3);
@@ -635,6 +695,9 @@ code {
   padding: 0;
 }
 .modalhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -887,6 +950,7 @@ code {
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 960px) {
   .cards { grid-template-columns: repeat(2, 1fr); }
+  .main { padding: 20px; }
 }
 @media (max-width: 768px) {
   .side {
@@ -923,12 +987,60 @@ code {
   .subscription-actions { justify-content: flex-start; }
   .subscription-qr-button { width: 112px; }
 }
+@media (max-width: 600px) {
+  .app { display: block; }
+  .side {
+    position: sticky;
+    z-index: 20;
+    top: 0;
+    width: 100%;
+    height: auto;
+    padding: 10px 12px 6px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .25);
+  }
+  .side-brand { justify-content: flex-start; padding: 0 2px 9px; margin-bottom: 6px; }
+  .side-brand div:last-child, .nav span { display: block; }
+  .side-brand p, .side-status, .nav-section-title { display: none; }
+  .nav-group { display: flex; flex: none; gap: 5px; overflow-x: auto; padding-bottom: 4px; }
+  .nav { width: auto; flex: 0 0 auto; min-height: 40px; padding: 8px 10px; font-size: 12px; }
+  .nav i { width: auto; }
+  .top { margin-bottom: 18px; }
+  .top h2 { font-size: 20px; }
+  .actions { gap: 7px; }
+  .actions select { flex: 1 1 100%; }
+  .actions .btn { flex: 1 1 auto; }
+  .panel { padding: 16px; }
+  .modal { padding: 10px; }
+  .modalbox { max-height: min(96vh, 96dvh); }
+  .modal-body { padding: 16px; }
+  .toast { left: 12px; right: 12px; bottom: 12px; }
+}
+@media (max-width: 400px) {
+  .cards { gap: 8px; }
+  .card { padding: 13px; }
+  .card b { font-size: 21px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
 </style>
 </head>
 <body>
 
+<div id="boot" class="boot" role="status" aria-live="polite">
+  <div class="boot-card">
+    <div class="boot-mark">M</div>
+    <p class="boot-title">MXIOC // Control Center</p>
+    <p id="bootStatus" class="boot-status">正在验证登录状态…</p>
+    <div class="boot-progress" aria-hidden="true"></div>
+    <button id="bootRetry" class="btn hidden" type="button">[ 重新加载 ]</button>
+  </div>
+</div>
+
 <!-- LOGIN TERMINAL -->
-<div id="login" class="login">
+<div id="login" class="login hidden">
   <form id="loginForm" class="loginbox">
     <div class="login-header">
       <div class="window-dots">
@@ -950,7 +1062,7 @@ code {
         <div>STATUS // <b>ENCRYPTED SHELL READY</b></div>
       </div>
       <label for="user">AUTH_USER</label>
-      <input id="user" autocomplete="username" placeholder="Enter username..." required autofocus>
+      <input id="user" autocomplete="username" placeholder="Enter username..." required>
       <label for="pass">AUTH_PASSWORD</label>
       <input id="pass" type="password" autocomplete="current-password" placeholder="Enter password..." required>
       <button class="btn primary full" type="submit">[ EXECUTE AUTHENTICATION ➔ ]</button>
@@ -971,16 +1083,16 @@ code {
     </div>
     <div class="nav-group">
       <div class="nav-section-title">Navigation</div>
-      <div class="nav active" data-page="overview"><i>⌂</i><span>[01] 总览</span></div>
-      <div class="nav" data-page="nodes"><i>◆</i><span>[02] 节点管理</span></div>
-      <div class="nav" data-page="chains"><i>⇄</i><span>[03] 链式代理</span></div>
-      <div class="nav" data-page="groups"><i>◫</i><span>[04] 策略组管理</span></div>
-      <div class="nav" data-page="rules"><i>≡</i><span>[05] 路由规则</span></div>
-      <div class="nav" data-page="dns"><i>◎</i><span>[06] DNS 分流</span></div>
-      <div class="nav" data-page="subscriptions"><i>↗</i><span>[07] 订阅工具</span></div>
-      <div class="nav" data-page="raw"><i>{ }</i><span>[08] 原始配置</span></div>
-      <div class="nav" data-page="system"><i>⚿</i><span>[09] 账号与安全</span></div>
-      <div class="nav" data-page="maintenance"><i>⚙</i><span>[10] 升级与卸载</span></div>
+      <button class="nav active" type="button" data-page="overview"><i>⌂</i><span>[01] 总览</span></button>
+      <button class="nav" type="button" data-page="nodes"><i>◆</i><span>[02] 节点管理</span></button>
+      <button class="nav" type="button" data-page="chains"><i>⇄</i><span>[03] 链式代理</span></button>
+      <button class="nav" type="button" data-page="groups"><i>◫</i><span>[04] 策略组管理</span></button>
+      <button class="nav" type="button" data-page="rules"><i>≡</i><span>[05] 路由规则</span></button>
+      <button class="nav" type="button" data-page="dns"><i>◎</i><span>[06] DNS 分流</span></button>
+      <button class="nav" type="button" data-page="subscriptions"><i>↗</i><span>[07] 订阅工具</span></button>
+      <button class="nav" type="button" data-page="raw"><i>{ }</i><span>[08] 原始配置</span></button>
+      <button class="nav" type="button" data-page="system"><i>⚿</i><span>[09] 账号与安全</span></button>
+      <button class="nav" type="button" data-page="maintenance"><i>⚙</i><span>[10] 升级与卸载</span></button>
     </div>
     <div class="side-status">
       <span class="status-indicator"></span>
@@ -1052,8 +1164,40 @@ function showLogin() {
   sessionStorage.removeItem('mxioc_token');
   localStorage.removeItem('mxioc_token');
   S.token = null;
+  S.data = null;
+  S.profiles = [];
+  S.nodeSelection.clear();
+  $('content').replaceChildren();
+  $('modal').classList.add('hidden');
+  $('modalBody').replaceChildren();
+  $('boot').classList.add('hidden');
   $('app').classList.add('hidden');
   $('login').classList.remove('hidden');
+  $('user').focus();
+}
+
+async function showAuthenticatedApp() {
+  await loadProfiles();
+  await reload(false);
+  await go('overview');
+  $('boot').classList.add('hidden');
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  void checkUpdateNotice();
+}
+
+async function bootstrap() {
+  $('boot').classList.remove('hidden', 'failed');
+  $('bootStatus').textContent = '正在验证登录状态…';
+  $('bootRetry').classList.add('hidden');
+  try {
+    await showAuthenticatedApp();
+  } catch (error) {
+    if (!$('login').classList.contains('hidden')) return;
+    $('boot').classList.add('failed');
+    $('bootStatus').textContent = '加载失败：' + error.message;
+    $('bootRetry').classList.remove('hidden');
+  }
 }
 
 async function logout(remote = true) {
@@ -1210,7 +1354,11 @@ const pageInfo = {
 
 async function go(page) {
   S.page = page;
-  document.querySelectorAll('.nav').forEach(n => n.classList.toggle('active', n.dataset.page === page));
+  document.querySelectorAll('.nav').forEach(n => {
+    n.classList.toggle('active', n.dataset.page === page);
+    if (n.dataset.page === page) n.setAttribute('aria-current', 'page');
+    else n.removeAttribute('aria-current');
+  });
   $('title').textContent = pageInfo[page][0];
   $('subtitle').textContent = pageInfo[page][1];
   $('titleBreadcrumb').textContent = page;
@@ -1227,10 +1375,10 @@ function draw() {
 
 function cards() {
   return `<div class="cards">
-    <div class="card"><span>NODES_COUNT</span><b>${S.data.nodes.length}</b></div>
-    <div class="card"><span>GROUPS_COUNT</span><b>${S.data.groups.length}</b></div>
-    <div class="card"><span>RULES_COUNT</span><b>${S.data.rules.length}</b></div>
-    <div class="card"><span>DNS_POLICIES</span><b>${S.data.dnsPolicies.length}</b></div>
+    <div class="card"><span>节点</span><b>${S.data.nodes.length}</b></div>
+    <div class="card"><span>策略组</span><b>${S.data.groups.length}</b></div>
+    <div class="card"><span>路由规则</span><b>${S.data.rules.length}</b></div>
+    <div class="card"><span>DNS 分流</span><b>${S.data.dnsPolicies.length}</b></div>
   </div>`;
 }
 
@@ -2895,6 +3043,9 @@ async function restoreBackup(e) {
 // Global Form Submissions & Event Handlers
 $('loginForm').onsubmit = async e => {
   e.preventDefault();
+  const submit = $('loginForm').querySelector('[type="submit"]');
+  submit.disabled = true;
+  $('loginError').textContent = '';
   try {
     let r = await fetch('/admin/api/login', jsonOpt('POST', {
       username: $('user').value,
@@ -2905,17 +3056,15 @@ $('loginForm').onsubmit = async e => {
     S.token = null;
     sessionStorage.removeItem('mxioc_token');
     localStorage.removeItem('mxioc_token');
-    $('login').classList.add('hidden');
-    $('app').classList.remove('hidden');
-    await loadProfiles();
-    await go('overview');
-    await checkUpdateNotice();
+    await showAuthenticatedApp();
   } catch (x) {
     $('loginError').textContent = x.message;
+  } finally {
+    submit.disabled = false;
   }
 };
 
-document.querySelectorAll('.nav').forEach(n => n.onclick = () => go(n.dataset.page));
+document.querySelectorAll('.nav').forEach(n => n.onclick = () => go(n.dataset.page).catch(error => notice('加载失败：' + error.message)));
 $('modalClose').onclick = closeModal;
 $('modal').onclick = e => { if (e.target === $('modal')) e.stopPropagation(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
@@ -2939,6 +3088,7 @@ $('refresh').onclick = async () => {
   }
 };
 $('importNode').onclick = importNodeModal;
+$('bootRetry').onclick = bootstrap;
 $('add').onclick = () => ({
   nodes: nodeModal,
   chains: chainModal,
@@ -2947,12 +3097,7 @@ $('add').onclick = () => ({
   dns: dnsModal
 }[S.page])();
 
-$('login').classList.add('hidden');
-$('app').classList.remove('hidden');
-go('overview').then(() => checkUpdateNotice()).catch(error => {
-  if (!$('login').classList.contains('hidden')) return;
-  notice('加载失败：' + error.message);
-});
+void bootstrap();
 </script>
 </body>
 </html>
