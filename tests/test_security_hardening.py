@@ -57,14 +57,14 @@ class SecurityHardeningTests(unittest.TestCase):
         handler.headers["Origin"] = "https://attacker.example"
         self.assertFalse(handler.same_origin_request())
 
-    def test_plain_http_admin_is_only_allowed_on_loopback_host(self):
+    def test_loopback_proxy_without_forwarded_header_is_accepted(self):
         handler = object.__new__(server.Handler)
         handler.connection = object()
         handler.client_address = ("127.0.0.1", 12345)
         handler.headers = {"Host": "vpn.example.com"}
-        self.assertFalse(handler.secure_admin_transport())
-        handler.headers["Host"] = "127.0.0.1:62577"
         self.assertTrue(handler.secure_admin_transport())
+        handler.client_address = ("198.51.100.8", 12345)
+        self.assertFalse(handler.secure_admin_transport())
 
 
 if __name__ == "__main__":

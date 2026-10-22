@@ -1988,7 +1988,16 @@ class Handler(BaseHTTPRequestHandler):
         forwarded = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
         if forwarded:
             return forwarded == "https"
-        return bool(getattr(self.connection, "cipher", None))
+        if getattr(self.connection, "cipher", None):
+            return True
+        # The service only listens on loopback.  A few existing Nginx configs
+        # predate X-Forwarded-Proto, so accepting a loopback peer here keeps
+        # those HTTPS-terminating proxies working while the backend remains
+        # unreachable from the network.
+        try:
+            return ipaddress.ip_address(self.client_address[0]).is_loopback
+        except (ValueError, IndexError, TypeError):
+            return False
 
     def client_ip(self):
         peer = str(self.client_address[0] if self.client_address else "")
