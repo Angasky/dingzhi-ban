@@ -1821,11 +1821,11 @@ async function system() {
       </div>
       <div>
         <label>NEW_PASSWORD // 新密码（不修改可留空）</label>
-        <input id="pwNew" type="password" minlength="10" autocomplete="new-password">
+        <input id="pwNew" type="password" minlength="12" autocomplete="new-password">
       </div>
       <div>
         <label>CONFIRM_NEW_PASSWORD // 确认新密码</label>
-        <input id="pwNew2" type="password" minlength="10" autocomplete="new-password">
+        <input id="pwNew2" type="password" minlength="12" autocomplete="new-password">
       </div>
       <div class="span2" style="margin-top:14px;">
         <button class="btn primary">[ 💾 保存用户名与密码 ]</button>
@@ -2577,7 +2577,7 @@ async function shareNode(index) {
     let encodedName = encodeURIComponent(data.name + '.txt');
     openModal('NODE_SHARE // 单节点二维码与导出', `
       <div class="node-share-hero">
-        <img class="node-share-qr" src="/admin/api/qrcode?url=${encodedUri}" alt="${esc(data.name)} 节点二维码">
+        <img class="node-share-qr" src="/admin/api/nodes/qrcode?name=${encodeURIComponent(data.name)}" alt="${esc(data.name)} 节点二维码">
         <div class="node-share-meta">
           <label>NODE_NAME // 节点名称</label>
           <b>${esc(data.name)}</b>
@@ -2642,12 +2642,12 @@ function profileManager() {
             <input id="profileCustomSlug" type="checkbox" onchange="toggleProfileSlugFields('profile')">
             <span>开启高风险模式并自定义链接标识</span>
           </label>
-          <div class="hint">// 默认由系统生成 12 位随机字符，避免 /clash 等固定地址被扫描。</div>
+          <div class="hint">// 默认由系统生成 50 位、约 256-bit 强度的随机访问密钥，防止扫描或枚举。</div>
         </div>
         <div id="profileSlugFields" class="span2 hidden">
           <label>自定义链接标识 (Slug ID)</label>
-          <input id="profileSlug" maxlength="80" placeholder="例如 *** 或 private-link">
-          <div class="hint">// 高风险：自定义地址更容易被猜测。可以输入带或不带开头斜杠的标识。</div>
+          <input id="profileSlug" minlength="32" maxlength="80" placeholder="至少 32 位随机字符">
+          <div class="hint">// 自定义标识至少 32 位；请使用密码管理器生成的随机内容。</div>
         </div>
         <div class="span2">
           <label>配置模板来源</label>
@@ -2706,11 +2706,11 @@ function profileEdit(encoded) {
       <input id="editProfileCustomSlug" type="checkbox" ${p.customSlug ? 'checked' : ''} onchange="toggleProfileSlugFields('editProfile')">
       <span>开启高风险模式并自定义链接标识</span>
     </label>
-    <div class="hint">// 关闭高风险模式后，系统会使用 12 位随机字符替换当前地址，旧链接立即失效。</div>
+    <div class="hint">// 关闭自定义模式后，系统会使用 50 位随机访问密钥替换当前地址，旧链接立即失效。</div>
     <div id="editProfileSlugFields" class="${p.customSlug ? '' : 'hidden'}">
       <label>自定义链接标识 (Slug ID)</label>
-      <input id="editProfileSlug" maxlength="80" value="${esc(p.slug)}" ${p.customSlug ? 'required' : ''}>
-      <div class="hint">// 高风险模式允许使用 *** 等 URL 安全字符，请勿使用容易被猜到的名称。</div>
+      <input id="editProfileSlug" minlength="32" maxlength="80" value="${esc(p.slug)}" ${p.customSlug ? 'required' : ''}>
+      <div class="hint">// 自定义标识至少 32 位；短地址会被服务器拒绝。</div>
     </div>
     <div id="formError" class="error"></div>
     <button class="btn primary" style="margin-top:16px;">[ 💾 保存修改 ]</button>
@@ -2719,7 +2719,7 @@ function profileEdit(encoded) {
   $('editProfile').onsubmit = async e => {
     e.preventDefault();
     if (p.customSlug && !on('editProfileCustomSlug') &&
-        !confirm('关闭高风险模式后将生成新的 12 位随机地址，当前订阅链接会立即失效。确认继续？')) return;
+        !confirm('关闭自定义模式后将生成新的 50 位随机地址，当前订阅链接会立即失效。确认继续？')) return;
     try {
       let d = await api('/profiles', jsonOpt('PUT', {
         oldId: p.id,
@@ -2917,7 +2917,7 @@ $('loginForm').onsubmit = async e => {
 
 document.querySelectorAll('.nav').forEach(n => n.onclick = () => go(n.dataset.page));
 $('modalClose').onclick = closeModal;
-$('modal').onclick = e => { if (e.target === $('modal')) closeModal(); };
+$('modal').onclick = e => { if (e.target === $('modal')) e.stopPropagation(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 $('logout').onclick = () => logout(true);

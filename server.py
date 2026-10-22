@@ -89,7 +89,14 @@ REPOSITORY_API = f"https://api.github.com/repos/{REPOSITORY}/commits/main"
 REPOSITORY_RAW = f"https://raw.githubusercontent.com/{REPOSITORY}"
 SESSIONS = None
 SESSION_LOCK = threading.RLock()
-SESSION_TTL = 30 * 24 * 3600
+SESSION_TTL = 12 * 3600
+MAX_SESSIONS = 8
+PBKDF2_ITERATIONS = 600_000
+LEGACY_PBKDF2_ITERATIONS = 240_000
+LOGIN_WINDOW = 15 * 60
+LOGIN_MAX_FAILURES = 5
+LOGIN_FAILURES = {}
+LOGIN_LOCK = threading.RLock()
 LOCK = threading.RLock()
 UPDATE_LOCK = threading.RLock()
 GEO_LOCK = threading.RLock()
@@ -324,10 +331,20 @@ def load_profiles():
     try:
         mtime = PROFILES_FILE.stat().st_mtime_ns
         if PROFILES_CACHE is not None and PROFILES_MTIME == mtime:
-            return PROFILES_CACHE
-        data = json.loads(PROFILES_FILE.read_text(encoding="utf-8"))
+            data = PROFILES_CACHE
+        else:
+            data = json.loads(PROFILES_FILE.read_text(encoding="utf-8"))
         if not isinstance(data.get("profiles"), list):
             raise ValueError("订阅配置索引损坏")
+        migrated = False
+        for record in data["profiles"]:
+            if not record.get("slug") or (record.get("customSlug") and len(str(record.get("slug", ""))) < 32):
+                record["slug"] = unique_slug(data)
+                record["customSlug"] = False
+                migrated = True
+        if migrated:
+            save_profiles(data)
+            return data
         PROFILES_CACHE = data
         PROFILES_MTIME = mtime
         return data
@@ -354,7 +371,7 @@ def profile_record(profile_id=None):
     return record
 
 
-def random_slug(length=12):
+def random_slug(length=50):
     alphabet = string.ascii_lowercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
@@ -363,7 +380,7 @@ def record_slug(record):
     return str(record.get("slug") or record.get("id") or "")
 
 
-def unique_slug(data, length=12):
+def unique_slug(data, length=50):
     existing = {record_slug(record) for record in data.get("profiles", [])}
     for _ in range(100):
         value = random_slug(length)
@@ -424,11 +441,10 @@ def empty_profile_config(template_path=None):
 
 def public_profile(record):
     slug = record_slug(record)
-    legacy = "slug" not in record
     return {"id": record["id"], "name": record.get("name", record["id"]),
             "protected": bool(record.get("protected")), "slug": slug,
-            "customSlug": bool(record.get("customSlug", legacy)),
-            "url": "/clash" if legacy and record["id"] == "clash" else "/sub/" + quote(slug, safe="")}
+            "customSlug": bool(record.get("customSlug", False)),
+            "url": "/sub/" + quote(slug, safe="")}
 
 
 def list_profiles():
@@ -437,8 +453,8 @@ def list_profiles():
 
 def valid_profile_slug(value):
     value = str(value or "").strip().strip("/")
-    if not re.fullmatch(r"[A-Za-z0-9._~!*'()@:-]{1,80}", value):
-        raise ValueError("自定义链接标识只能使用 1–80 位 URL 安全字符")
+    if not re.fullmatch(r"[A-Za-z0-9._~!*'()@:-]{32,80}", value):
+        raise ValueError("自定义链接标识必须使用 32–80 位 URL 安全字符")
     if value.lower() in {".", "..", "admin", "api", "sub", "convert", "clash"}:
         raise ValueError("该链接标识已被系统保留")
     return value
@@ -463,7 +479,7 @@ def create_profile(payload):
     validate_config(doc)
     text = yaml_dump(doc)
     path.write_text(text, encoding="utf-8")
-    os.chmod(path, 0o644)
+    os.chmod(path, 0o600)
     stat = path.stat()
     with CONFIG_CACHE_LOCK:
         CONFIG_CACHE[str(path.resolve())] = {
@@ -519,9 +535,9 @@ def delete_profile(profile_id):
 
 
 
-def password_hash(password, salt=None):
+def password_hash(password, salt=None, iterations=PBKDF2_ITERATIONS):
     salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 240000)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), int(iterations))
     return salt, digest.hex()
 
 
@@ -531,18 +547,21 @@ def load_auth():
     if LEGACY_AUTH.exists():
         username, password = LEGACY_AUTH.read_text(encoding="utf-8").strip().split(":", 1)
         salt, digest = password_hash(password)
-        save_auth(username, salt, digest)
-        return {"username": username, "salt": salt, "hash": digest}
+        save_auth(username, salt, digest, PBKDF2_ITERATIONS)
+        return {"username": username, "salt": salt, "hash": digest,
+                "iterations": PBKDF2_ITERATIONS}
     password = secrets.token_urlsafe(15)
     salt, digest = password_hash(password)
-    save_auth("admin", salt, digest)
+    save_auth("admin", salt, digest, PBKDF2_ITERATIONS)
     (ROOT / "initial-password.txt").write_text("admin:" + password + "\n", encoding="utf-8")
     os.chmod(ROOT / "initial-password.txt", 0o600)
-    return {"username": "admin", "salt": salt, "hash": digest}
+    return {"username": "admin", "salt": salt, "hash": digest,
+            "iterations": PBKDF2_ITERATIONS}
 
 
-def save_auth(username, salt, digest):
-    AUTH.write_text(json.dumps({"username": username, "salt": salt, "hash": digest}), encoding="utf-8")
+def save_auth(username, salt, digest, iterations=PBKDF2_ITERATIONS):
+    AUTH.write_text(json.dumps({"username": username, "salt": salt, "hash": digest,
+                                "iterations": int(iterations)}), encoding="utf-8")
     os.chmod(AUTH, 0o600)
 
 
@@ -554,8 +573,8 @@ def update_auth(current_username, current_password, new_username="", new_passwor
     if not 3 <= len(username) <= 64 or ":" in username or any(char.isspace() for char in username):
         raise ValueError("新用户名需要为 3–64 位，且不能包含空格或冒号")
     password = str(new_password or "")
-    if password and len(password) < 10:
-        raise ValueError("新密码至少需要 10 位")
+    if password and len(password) < 12:
+        raise ValueError("新密码至少需要 12 位")
     if password:
         salt, digest = password_hash(password)
     else:
@@ -567,8 +586,44 @@ def update_auth(current_username, current_password, new_username="", new_passwor
 
 def authenticate(username, password):
     auth = load_auth()
-    _, digest = password_hash(password, auth["salt"])
-    return hmac.compare_digest(username, auth["username"]) and hmac.compare_digest(digest, auth["hash"])
+    iterations = int(auth.get("iterations") or LEGACY_PBKDF2_ITERATIONS)
+    _, digest = password_hash(password, auth["salt"], iterations)
+    username_ok = hmac.compare_digest(str(username), str(auth["username"]))
+    password_ok = hmac.compare_digest(digest, str(auth["hash"]))
+    valid = username_ok and password_ok
+    if valid and iterations < PBKDF2_ITERATIONS:
+        salt, digest = password_hash(password)
+        save_auth(auth["username"], salt, digest, PBKDF2_ITERATIONS)
+    return valid
+
+
+def login_retry_after(client, now=None):
+    now = float(now if now is not None else time.time())
+    cutoff = now - LOGIN_WINDOW
+    with LOGIN_LOCK:
+        attempts = [stamp for stamp in LOGIN_FAILURES.get(str(client), []) if stamp > cutoff]
+        if attempts:
+            LOGIN_FAILURES[str(client)] = attempts
+        else:
+            LOGIN_FAILURES.pop(str(client), None)
+        if len(attempts) < LOGIN_MAX_FAILURES:
+            return 0
+        return max(1, int(attempts[0] + LOGIN_WINDOW - now) + 1)
+
+
+def record_login_failure(client, now=None):
+    now = float(now if now is not None else time.time())
+    with LOGIN_LOCK:
+        LOGIN_FAILURES.setdefault(str(client), []).append(now)
+        if len(LOGIN_FAILURES) > 4096:
+            oldest = min(LOGIN_FAILURES, key=lambda key: LOGIN_FAILURES[key][-1])
+            LOGIN_FAILURES.pop(oldest, None)
+    return login_retry_after(client, now)
+
+
+def clear_login_failures(client):
+    with LOGIN_LOCK:
+        LOGIN_FAILURES.pop(str(client), None)
 
 
 def session_digest(token):
@@ -621,6 +676,9 @@ def create_session():
         for key, expires in list(sessions.items()):
             if expires <= now:
                 sessions.pop(key, None)
+        if len(sessions) > MAX_SESSIONS:
+            for key, _ in sorted(sessions.items(), key=lambda item: item[1])[:-MAX_SESSIONS]:
+                sessions.pop(key, None)
         save_sessions_locked()
     return token
 
@@ -639,9 +697,6 @@ def session_valid(header="", cookie_header=""):
                 sessions.pop(digest, None)
                 save_sessions_locked()
             return False
-        if expires < now + SESSION_TTL - 24 * 3600:
-            sessions[digest] = now + SESSION_TTL
-            save_sessions_locked()
     return True
 
 
@@ -762,14 +817,16 @@ def write_config(doc, reason="manual"):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     with LOCK:
-        shutil.copy2(files[0], BACKUP_DIR / f"{profile_id}.{stamp}.{reason}.yaml")
+        backup_path = BACKUP_DIR / f"{profile_id}.{stamp}.{reason}.yaml"
+        shutil.copy2(files[0], backup_path)
+        os.chmod(backup_path, 0o600)
         for path in files:
             fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     handle.write(text)
                     handle.flush()
-                os.chmod(temp_name, 0o644)
+                os.chmod(temp_name, 0o600)
                 os.replace(temp_name, path)
                 stat = path.stat()
                 key = str(path.resolve())
@@ -1933,12 +1990,51 @@ class Handler(BaseHTTPRequestHandler):
             return forwarded == "https"
         return bool(getattr(self.connection, "cipher", None))
 
+    def client_ip(self):
+        peer = str(self.client_address[0] if self.client_address else "")
+        try:
+            peer_ip = ipaddress.ip_address(peer)
+        except ValueError:
+            return "unknown"
+        if peer_ip.is_loopback:
+            forwarded = self.headers.get("X-Real-IP", "").strip()
+            try:
+                return str(ipaddress.ip_address(forwarded)) if forwarded else str(peer_ip)
+            except ValueError:
+                return str(peer_ip)
+        return str(peer_ip)
+
+    def same_origin_request(self):
+        expected_host = self.headers.get("Host", "").strip().lower()
+        expected_scheme = "https" if self.secure_request() else "http"
+        for source in (self.headers.get("Origin", ""), self.headers.get("Referer", "")):
+            if not source:
+                continue
+            parsed = urlparse(source)
+            return parsed.scheme.lower() == expected_scheme and parsed.netloc.lower() == expected_host
+        return False
+
+    def secure_admin_transport(self):
+        if self.secure_request():
+            return True
+        host = (urlsplit("//" + self.headers.get("Host", "")).hostname or "").lower()
+        return host in {"127.0.0.1", "::1", "localhost"}
+
+    def security_headers(self):
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("X-Robots-Tag", "noindex, nofollow, noarchive")
+        if self.secure_request():
+            self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
     def json_out(self, value, status=200, headers=None):
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.security_headers()
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
@@ -1948,8 +2044,9 @@ class Handler(BaseHTTPRequestHandler):
     def svg_out(self, body):
         self.send_response(200)
         self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
-        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.security_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1958,9 +2055,15 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         if length > MAX_BODY:
             raise ValueError("请求内容过大")
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if length and content_type != "application/json":
+            raise ValueError("管理接口只接受 application/json 请求")
         return json.loads(self.rfile.read(length) or b"{}")
 
     def authorized(self):
+        if not self.secure_admin_transport():
+            self.json_out({"error": "管理后台必须通过 HTTPS 访问"}, 426)
+            return False
         if session_valid(self.headers.get("Authorization", ""), self.headers.get("Cookie", "")):
             return True
         self.json_out({"error": "请重新登录"}, 401)
@@ -1982,7 +2085,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + filename)
             self.send_header("Profile-Update-Interval", "24")
             self.send_header("Subscription-Userinfo", "upload=0; download=0; total=1125899906842624; expire=4102444800")
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -2000,7 +2105,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Profile-Update-Interval", "24")
             self.send_header("Subscription-Userinfo", "upload=0; download=0; total=1125899906842624; expire=4102444800")
             self.send_header("X-Mxioc-Skipped-Nodes", str(len(skipped)))
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -2014,6 +2121,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
         self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.security_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -2026,10 +2135,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/admin", "/admin/"):
             return self.page()
         if path == "/clash":
-            record = profile_record("clash")
-            if "slug" in record:
-                return self.send_error(404)
-            return self.subscription(record["id"])
+            return self.send_error(404)
         if path.startswith("/sub/"):
             try:
                 return self.subscription(public_profile_record(unquote(path[5:]))["id"])
@@ -2066,6 +2172,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/admin/api/nodes/share":
                 query = parse_qs(urlparse(self.path).query)
                 self.json_out(exported_node_link((query.get("name") or [""])[0]))
+            elif path == "/admin/api/nodes/qrcode":
+                query = parse_qs(urlparse(self.path).query)
+                node = exported_node_link((query.get("name") or [""])[0])
+                self.svg_out(subscription_qr_svg(node["uri"]))
             elif path == "/admin/api/conversions":
                 self.json_out({"formats": conversion_report()})
             elif path == "/admin/api/raw":
@@ -2085,12 +2195,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if not self.same_origin_request():
+            return self.json_out({"error": "请求来源校验失败，请刷新页面后重试"}, 403)
         if path == "/admin/api/login":
             try:
+                if not self.secure_admin_transport():
+                    return self.json_out({"error": "登录必须通过 HTTPS 访问"}, 426)
+                client = self.client_ip()
+                retry_after = login_retry_after(client)
+                if retry_after:
+                    return self.json_out({"error": "登录失败次数过多，请稍后再试",
+                                          "retryAfter": retry_after}, 429,
+                                         {"Retry-After": str(retry_after)})
                 data = self.body()
-                if not authenticate(str(data.get("username", "")), str(data.get("password", ""))):
-                    time.sleep(0.35)
+                username = str(data.get("username", ""))
+                password = str(data.get("password", ""))
+                account_key = "account:" + hashlib.sha256(username.lower().encode()).hexdigest()
+                retry_after = login_retry_after(account_key)
+                if retry_after:
+                    return self.json_out({"error": "登录失败次数过多，请稍后再试",
+                                          "retryAfter": retry_after}, 429,
+                                         {"Retry-After": str(retry_after)})
+                credentials_valid = (1 <= len(username) <= 64 and 1 <= len(password) <= 256 and
+                                     authenticate(username, password))
+                if not credentials_valid:
+                    retry_after = max(record_login_failure(client), record_login_failure(account_key))
+                    time.sleep(0.5)
+                    if retry_after:
+                        return self.json_out({"error": "登录失败次数过多，请稍后再试",
+                                              "retryAfter": retry_after}, 429,
+                                             {"Retry-After": str(retry_after)})
                     return self.json_out({"error": "用户名或密码错误"}, 401)
+                clear_login_failures(client)
+                clear_login_failures(account_key)
                 token = create_session()
                 return self.json_out({"ok": True}, headers={"Set-Cookie": session_cookie(token, self.secure_request())})
             except Exception as exc:
@@ -2160,6 +2297,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json_out({"error": str(exc)}, 400)
 
     def do_PUT(self):
+        if not self.same_origin_request():
+            return self.json_out({"error": "请求来源校验失败，请刷新页面后重试"}, 403)
         if not self.authorized():
             return
         path = urlparse(self.path).path
@@ -2183,6 +2322,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json_out({"error": str(exc)}, 400)
 
     def do_DELETE(self):
+        if not self.same_origin_request():
+            return self.json_out({"error": "请求来源校验失败，请刷新页面后重试"}, 403)
         if not self.authorized():
             return
         path = urlparse(self.path).path
@@ -2208,8 +2349,30 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class LimitedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, *args, max_workers=32, **kwargs):
+        self.request_slots = threading.BoundedSemaphore(max_workers)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        self.request_slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.request_slots.release()
+
+
 if __name__ == "__main__":
     load_profiles()
     load_auth()
     threading.Thread(target=update_checker_loop, daemon=True).start()
-    ThreadingHTTPServer(("127.0.0.1", 62577), Handler).serve_forever()
+    LimitedThreadingHTTPServer(("127.0.0.1", 62577), Handler).serve_forever()

@@ -42,7 +42,7 @@ class PersistentSessionTests(unittest.TestCase):
 
     def test_cookie_security_attributes(self):
         cookie = server.session_cookie("token")
-        for value in ("Max-Age=2592000", "HttpOnly", "Secure", "SameSite=Strict", "Path=/admin"):
+        for value in ("Max-Age=43200", "HttpOnly", "Secure", "SameSite=Strict", "Path=/admin"):
             self.assertIn(value, cookie)
 
     def test_http_cookie_omits_secure_attribute(self):

@@ -45,13 +45,18 @@ class PublicSubscriptionTests(unittest.TestCase):
             setattr(server, name, value)
         self.temp.cleanup()
 
-    def test_main_clash_subscription_is_public_without_login(self):
+    def test_legacy_clash_alias_is_disabled_after_secure_migration(self):
+        profile = server.list_profiles()[0]
         port = self.httpd.server_address[1]
-        with urlopen(f"http://127.0.0.1:{port}/clash", timeout=3) as response:
+        with urlopen(f"http://127.0.0.1:{port}{profile['url']}", timeout=3) as response:
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
             self.assertIn("proxies:", body)
             self.assertIn("attachment", response.headers["Content-Disposition"])
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+        with self.assertRaises(HTTPError) as error:
+            urlopen(f"http://127.0.0.1:{port}/clash", timeout=3)
+        self.assertEqual(error.exception.code, 404)
 
     def test_qr_svg_is_generated_locally(self):
         svg = server.subscription_qr_svg("http://192.0.2.1/clash")

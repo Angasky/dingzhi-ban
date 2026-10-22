@@ -47,7 +47,7 @@ class AccountManagementTests(unittest.TestCase):
             server.update_auth("admin", "wrong-password", "operator", "")
 
     def test_short_new_password_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "至少需要 10 位"):
+        with self.assertRaisesRegex(ValueError, "至少需要 12 位"):
             server.update_auth("admin", "old-password", "admin", "short")
 
 
