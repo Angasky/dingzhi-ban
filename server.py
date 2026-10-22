@@ -1532,7 +1532,11 @@ def subscription_qr_svg(url):
     image = code.make_image(image_factory=SvgPathImage)
     output = io.BytesIO()
     image.save(output)
-    return output.getvalue()
+    svg = output.getvalue()
+    position = svg.find(b">", svg.find(b"<svg"))
+    if position >= 0:
+        svg = svg[:position + 1] + b'<rect width="100%" height="100%" fill="#fff"/>' + svg[position + 1:]
+    return svg
 
 
 def snapshot():

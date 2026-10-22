@@ -56,6 +56,7 @@ class PublicSubscriptionTests(unittest.TestCase):
     def test_qr_svg_is_generated_locally(self):
         svg = server.subscription_qr_svg("http://192.0.2.1/clash")
         self.assertIn(b"<svg", svg)
+        self.assertIn(b'<rect width="100%" height="100%" fill="#fff"/>', svg)
         self.assertGreater(len(svg), 500)
 
     def test_new_install_random_slug_is_public_and_clash_alias_is_absent(self):
