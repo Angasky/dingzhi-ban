@@ -1001,6 +1001,8 @@ code {
 .profile-card details code { display: block; margin-top: 8px; white-space: normal; overflow-wrap: anywhere; }
 .profile-card summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
 .profile-usage { font-size: 12px; color: var(--text-dim); }
+.server-log { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 14px; max-height: 52vh; overflow: auto; font: 12px/1.7 var(--font-mono); }
+.server-credentials { border-left: 3px solid var(--blue); padding-left: 16px; }
 
 /* The original terminal appearance is opt-in on each device; new devices default to it. */
 html[data-theme="high"] {
@@ -1190,6 +1192,7 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--border-g
       <div class="nav-section-title">工作空间</div>
       <button class="nav active" type="button" data-page="overview" title="总览"><i>⌂</i><span>总览</span></button>
       <button class="nav" type="button" data-page="profiles" title="订阅管理"><i>▦</i><span>订阅管理</span></button>
+      <button class="nav" type="button" data-page="servers" title="服务器管理"><i>▤</i><span>服务器管理</span></button>
       <button class="nav" type="button" data-page="nodes" title="节点管理"><i>◆</i><span>节点管理</span></button>
       <button class="nav" type="button" data-page="chains" title="链式代理"><i>⇄</i><span>链式代理</span></button>
       <button class="nav" type="button" data-page="groups" title="策略组管理"><i>◫</i><span>策略组管理</span></button>
@@ -1261,6 +1264,9 @@ const S = {
   ruleAction: '',
   profileFilter: 'all',
   profileSort: 'default',
+  servers: [],
+  serverId: '',
+  remoteRows: [],
   updatePrompted: ''
 };
 
@@ -1278,6 +1284,12 @@ function showLogin() {
   S.token = null;
   S.data = null;
   S.profiles = [];
+  S.servers = [];
+  S.remoteRows = [];
+  S.remoteLoaded = false;
+  S.remoteServer = null;
+  S.serverId = '';
+  S.jobView = null;
   S.nodeSelection.clear();
   S.filters = {};
   S.tablePages = {};
@@ -1469,6 +1481,8 @@ async function reload(render = true) {
 const pageInfo = {
   overview: ['总览', '综合订阅配置状态与核心运行指标'],
   profiles: ['订阅管理', '搜索、切换和管理所有订阅配置与分享链接'],
+  servers: ['服务器管理', '通过 SSH 安装 3x-ui，读取安装结果并管理远端节点'],
+  serverNodes: ['服务器节点', '直接管理远端 3x-ui 入站、中转和节点分享链接'],
   nodes: ['节点管理', '节点的新增、修改、删除与策略组同步'],
   chains: ['链式代理', '选择入口和出口节点组成两跳中继代理链路'],
   groups: ['策略组管理', '管理业务分组、节点列表和自动选择顺序'],
@@ -1486,8 +1500,8 @@ async function go(page) {
   if (S.page !== page) $('content').innerHTML = '<div class="empty" role="status">正在加载…</div>';
   S.page = page;
   document.querySelectorAll('.nav').forEach(n => {
-    n.classList.toggle('active', n.dataset.page === page);
-    if (n.dataset.page === page) n.setAttribute('aria-current', 'page');
+    n.classList.toggle('active', n.dataset.page === page || (page === 'serverNodes' && n.dataset.page === 'servers'));
+    if (n.dataset.page === page || (page === 'serverNodes' && n.dataset.page === 'servers')) n.setAttribute('aria-current', 'page');
     else n.removeAttribute('aria-current');
   });
   $('title').textContent = pageInfo[page][0];
@@ -1496,7 +1510,7 @@ async function go(page) {
   $('add').classList.toggle('hidden', !['nodes', 'chains', 'groups', 'rules', 'dns'].includes(page));
   $('importNode').classList.toggle('hidden', page !== 'nodes');
   if (!S.profiles.length) await loadProfiles();
-  if (!S.data && !['profiles', 'settings'].includes(page)) await reload(false);
+  if (!S.data && !['profiles', 'settings', 'servers', 'serverNodes'].includes(page)) await reload(false);
   if (S.page !== page) return;
   draw();
 }
@@ -1508,7 +1522,7 @@ function draw() {
     $('content').innerHTML = `<section class="panel"><h3>页面加载失败</h3><p class="muted">${esc(error.message)}</p><button class="btn" onclick="draw()">重试</button></section>`;
   };
   try {
-    Promise.resolve(({ overview, profiles, nodes, chains, groups, rules, dns, subscriptions, traffic, raw, system, settings, maintenance }[page] || overview)()).catch(failed);
+    Promise.resolve(({ overview, profiles, servers, serverNodes, nodes, chains, groups, rules, dns, subscriptions, traffic, raw, system, settings, maintenance }[page] || overview)()).catch(failed);
   } catch (error) { failed(error); }
 }
 
@@ -1651,6 +1665,232 @@ function profileClientLinks(encoded) {
 }
 
 function profileDuplicate(encoded) { profileCreate(decodeURIComponent(encoded)); }
+
+const remoteStage = stage => ({connecting:'连接 SSH',preflight:'检查安装环境',download:'下载脚本',install:'安装 3x-ui',credentials:'设置管理凭证',service:'启动服务',installed:'检查安装', 'api-check':'验证登录与接口',diagnostics:'读取失败诊断',complete:'安装完成'}[stage] || stage || '未开始');
+const remoteStatus = status => ({running:'安装中',succeeded:'已安装',failed:'安装失败',interrupted:'任务已中断'}[status] || '待连接');
+
+function panelLink(value) {
+  try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url.href : ''; } catch (_) { return ''; }
+}
+
+async function servers() {
+  const data = await api('/servers');
+  if (S.page !== 'servers') return;
+  S.servers = data.servers;
+  renderServers();
+}
+
+function renderServers() {
+  const q = S.filters.servers || '';
+  const page = tableSlice(S.servers.filter(s => `${s.name} ${s.host} ${s.domain}`.toLowerCase().includes(q.toLowerCase())), 'servers');
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>远端服务器</h3><p class="muted">先保存 SSH 和面板凭证，再发起安装。SSH 账号须为 root 或具有 sudo 权限。</p></div><button class="btn primary" onclick="serverForm()">＋ 添加服务器</button></div>
+    <div class="toolbar profiles-toolbar"><input id="search" aria-label="搜索服务器" placeholder="搜索名称、IP 或域名…" value="${esc(q)}"></div>
+    <div class="profile-grid">${page.rows.map(s => {
+      const id = encodeURIComponent(s.id), url = panelLink(s.panelUrl), running = s.job?.status === 'running';
+      return `<article class="profile-card"><div class="profile-card-head"><div><h4>${esc(s.name)}</h4><div class="profile-id">${esc(s.sshUser)}@${esc(s.host)}:${s.sshPort}</div></div><span class="pill ${s.job?.status === 'failed' ? 'reject' : ''}">${remoteStatus(s.job?.status)}</span></div>
+      <div class="profile-usage">${s.domain ? '绑定域名：' + esc(s.domain) : '无域名自动安装'}<br>面板账号：${esc(s.panelUser)}${s.job ? '<br>阶段：' + esc(remoteStage(s.job.stage)) : ''}</div>
+      ${s.lastError ? `<div class="error">${esc(s.lastError)}</div>` : ''}
+      ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开 3x-ui 面板 ↗</a><code style="overflow-wrap:anywhere;white-space:normal">${esc(url)}</code>` : ''}
+      <div class="toolbar"><button class="btn small primary" onclick="openRemoteNodes('${id}')" ${running ? 'disabled' : ''}>节点 / 中转</button><button class="btn small" onclick="serverForm('${id}')" ${running ? 'disabled' : ''}>连接设置</button><button class="btn small" onclick="serverTest('${id}',this)">测试 SSH</button></div>
+      <div class="toolbar profile-actions"><button class="btn small" onclick="serverInstall('${id}')" ${running ? 'disabled' : ''}>${s.job?.status === 'failed' || s.job?.status === 'interrupted' ? '重新安装 / 重试' : '安装 / 更新'}</button>
+      ${s.job ? `<button class="btn small" onclick="showServerJob('${encodeURIComponent(s.job.id)}')">安装日志</button>` : ''}
+      <button class="btn small" onclick="serverDiagnose('${id}')">读取诊断</button><button class="btn small danger" onclick="serverRemove('${id}')" ${running ? 'disabled' : ''}>移除管理</button></div></article>`;
+    }).join('') || '<div class="empty">尚未添加服务器，或没有匹配结果。</div>'}</div>${pagination(page)}</section>`;
+  bindSearch('servers', renderServers);
+}
+
+function serverForm(encoded = '') {
+  const s = S.servers.find(x => x.id === decodeURIComponent(encoded)) || {};
+  openModal(s.id ? '服务器连接设置' : '添加服务器', `<form id="serverForm"><div class="grid">
+    <div><label for="rsName">服务器名称</label><input id="rsName" required maxlength="80" value="${esc(s.name || '')}" placeholder="例如 香港入口"></div>
+    <div><label for="rsHost">服务器 IP</label><input id="rsHost" required value="${esc(s.host || '')}" placeholder="IPv4 或 IPv6"></div>
+    <div><label for="rsPort">SSH 端口</label><input id="rsPort" type="number" min="1" max="65535" required value="${s.sshPort || 22}"></div>
+    <div><label for="rsUser">SSH 账号</label><input id="rsUser" required maxlength="64" autocomplete="off" value="${esc(s.sshUser || 'root')}"></div>
+    <div class="span2"><label for="rsPassword">SSH 密码${s.id ? '（留空保留）' : ''}</label><input id="rsPassword" type="password" autocomplete="new-password" ${s.id ? '' : 'required'}><p class="hint">非 root 账号会使用此密码执行 sudo。密码加密保存在总面板服务器，不会回显。</p></div>
+    <div class="span2"><div class="toolbar"><button id="rsProbe" type="button" class="btn">检测 SSH 主机指纹</button><code id="rsFingerprint" style="overflow-wrap:anywhere;white-space:normal">${esc(s.fingerprint || '尚未检测')}</code></div>
+    <label class="inlinecheck"><input id="rsTrust" type="checkbox" ${s.fingerprint ? 'checked' : ''} required>我已核对该 SSH 指纹属于目标服务器</label></div>
+    <div><label for="rsMode">安装模式</label><select id="rsMode"><option value="auto">无域名：自动安装</option><option value="domain">绑定域名并申请证书</option></select></div>
+    <div id="rsDomainBox"><label for="rsDomain">绑定域名</label><input id="rsDomain" value="${esc(s.domain || '')}" placeholder="panel.example.com"></div>
+    <div><label for="rsPanelUser">预设 3x-ui 面板账号</label><input id="rsPanelUser" required minlength="3" maxlength="64" autocomplete="off" value="${esc(s.panelUser || 'admin')}"></div>
+    <div><label for="rsPanelPassword">预设 3x-ui 面板密码${s.id ? '（留空保留）' : ''}</label><input id="rsPanelPassword" type="password" minlength="12" autocomplete="new-password" ${s.id ? '' : 'required'}></div>
+  </div><div class="note">域名模式需先将域名解析到该服务器，并允许证书验证使用的 80 端口。无域名模式会返回 IP 加随机端口的 HTTP 面板地址；总面板管理接口始终走 SSH 隧道。</div>
+  <div id="rsError" class="error" role="alert"></div><button id="rsSave" class="btn primary">保存服务器</button></form>`);
+  let pin = s.fingerprint || '';
+  const form = $('serverForm'), stillOpen = () => $('serverForm') === form && !$('modal').classList.contains('hidden');
+  $('rsMode').value = s.domain ? 'domain' : 'auto';
+  const mode = () => { const bound = $('rsMode').value === 'domain'; $('rsDomainBox').classList.toggle('hidden', !bound); $('rsDomain').required = bound; };
+  mode(); $('rsMode').onchange = mode;
+  ['rsHost','rsPort'].forEach(id => $(id).oninput = () => { pin = ''; $('rsTrust').checked = false; $('rsFingerprint').textContent = '连接地址已变更，请重新检测'; });
+  $('rsProbe').onclick = async () => {
+    $('rsProbe').disabled = true; $('rsError').textContent = '';
+    const host = val('rsHost'), port = val('rsPort');
+    try {
+      const data = await api('/servers/probe', jsonOpt('POST', {host,sshPort:port}));
+      if (!stillOpen()) return;
+      if (host !== val('rsHost') || port !== val('rsPort')) return $('rsError').textContent = '连接地址已变化，请重新检测指纹';
+      pin = data.fingerprint; $('rsFingerprint').textContent = pin; $('rsTrust').checked = false;
+    } catch (error) { if (stillOpen()) $('rsError').textContent = error.message; }
+    finally { if (stillOpen()) $('rsProbe').disabled = false; }
+  };
+  $('serverForm').onsubmit = async e => {
+    e.preventDefault();
+    if (!pin || !$('rsTrust').checked) return $('rsError').textContent = '请先检测并核对 SSH 主机指纹';
+    $('rsSave').disabled = true;
+    const payload = {id:s.id, name:val('rsName'),host:val('rsHost'),sshPort:val('rsPort'),sshUser:val('rsUser'),sshPassword:$('rsPassword').value,
+      fingerprint:pin,domain:$('rsMode').value === 'domain' ? val('rsDomain') : '',panelUser:val('rsPanelUser'),panelPassword:$('rsPanelPassword').value};
+    try {
+      await api('/servers', jsonOpt(s.id ? 'PUT' : 'POST', payload));
+      if (stillOpen()) closeModal(); await servers(); notice('服务器已保存，可测试连接或发起安装');
+    } catch (error) { if (stillOpen()) { $('rsError').textContent = error.message; $('rsSave').disabled = false; } else notice(error.message); }
+  };
+}
+
+async function serverTest(encoded, button) {
+  button.disabled = true; button.textContent = '测试中…';
+  try { const result = await api('/servers/test', jsonOpt('POST', {id:decodeURIComponent(encoded)})); notice(result.message); }
+  catch (error) { alert(error.message); }
+  finally { if (button.isConnected) { button.disabled = false; button.textContent = '测试 SSH'; } }
+}
+
+async function serverInstall(encoded) {
+  const id = decodeURIComponent(encoded), s = S.servers.find(x => x.id === id);
+  if (!s || !confirm(`将在 ${s.host}:${s.sshPort} 上安装或更新 3x-ui，并将面板账号设为 ${s.panelUser}。${s.domain ? '绑定域名：'+s.domain : '使用无域名自动安装模式'}。确认执行？`)) return;
+  try {
+    const result = await api('/servers/install', jsonOpt('POST', {id,confirmed:true}));
+    await servers(); showServerJob(result.job.id);
+  } catch (error) { alert(error.message); }
+}
+
+async function showServerJob(jobId) {
+  const identity = decodeURIComponent(jobId);
+  const view = {};
+  S.jobView = view;
+  openModal('3x-ui 安装进度与日志', '<p id="serverJobState" role="status">正在读取任务…</p><div id="serverJobError" class="error" role="alert"></div><div id="serverJobResult"></div><pre id="serverJobLog" class="server-log"></pre>');
+  const poll = async () => {
+    if (S.jobView !== view || $('modal').classList.contains('hidden') || !$('serverJobLog')) return;
+    try {
+      const job = await api('/servers/jobs?id=' + encodeURIComponent(identity));
+      if (S.jobView !== view || !$('serverJobLog')) return;
+      $('serverJobState').textContent = (job.status === 'running' && job.error ? '安装失败，正在读取诊断' : remoteStatus(job.status)) + ' · ' + remoteStage(job.stage) + (job.exitCode != null ? ' · 退出码 '+job.exitCode : '');
+      $('serverJobError').textContent = job.error || '';
+      const log = $('serverJobLog'), bottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 50;
+      log.textContent = job.log || '等待远端输出…'; if (bottom) log.scrollTop = log.scrollHeight;
+      const url = panelLink(job.panelUrl);
+      $('serverJobResult').innerHTML = url ? `<p>面板地址：<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a></p><p class="hint">地址来自远端实际配置。若公网访问失败，请检查云防火墙及该面板端口是否放行。</p>` : '';
+      if (job.status === 'running') setTimeout(poll, 2500);
+      else if (S.page === 'servers') await servers();
+    } catch (error) { if ($('serverJobError')) $('serverJobError').textContent = '日志读取失败：'+error.message+'。关闭后可重新打开日志继续查看。'; }
+  };
+  await poll();
+}
+
+async function serverDiagnose(encoded) {
+  openModal('服务器诊断', '<p>正在读取服务状态、最近日志、监听端口和域名解析…</p><pre id="serverDiagnostic" class="server-log"></pre>');
+  try { const data = await api('/servers/diagnose', jsonOpt('POST', {id:decodeURIComponent(encoded)})); if ($('serverDiagnostic')) $('serverDiagnostic').textContent = data.log; }
+  catch (error) { if ($('serverDiagnostic')) $('serverDiagnostic').textContent = error.message; }
+}
+
+async function serverRemove(encoded) {
+  if (!confirm('移除该服务器在总面板中的连接信息和安装记录？远端 3x-ui 及节点仍会保留。')) return;
+  try { await api('/servers', jsonOpt('DELETE',{id:decodeURIComponent(encoded)})); await servers(); notice('已移除服务器管理记录'); }
+  catch (error) { alert(error.message); }
+}
+
+async function openRemoteNodes(encoded) {
+  S.serverId = decodeURIComponent(encoded); S.remoteLoaded = false; S.filters.remoteNodes = ''; S.tablePages.serverNodes = 1;
+  await go('serverNodes');
+}
+
+async function serverNodes(force = false) {
+  if (!S.serverId) return go('servers');
+  if (force || !S.remoteLoaded) {
+    const id = S.serverId;
+    const data = await api('/servers/inbounds?id=' + encodeURIComponent(id));
+    if (S.page !== 'serverNodes' || S.serverId !== id) return;
+    S.remoteRows = data.inbounds; S.remoteServer = data.server; S.remoteLoaded = true;
+  }
+  renderRemoteNodes();
+}
+
+function renderRemoteNodes() {
+  const q = S.filters.remoteNodes || '', s = S.remoteServer;
+  const page = tableSlice(S.remoteRows.filter(x => `${x.remark} ${x.protocol} ${x.port}`.toLowerCase().includes(q.toLowerCase())), 'serverNodes');
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>${esc(s.name)} · ${esc(s.host)}</h3><p class="muted">直接调用远端 3x-ui。导入节点会写入顶部所选订阅。</p></div><div class="toolbar"><button class="btn" onclick="go('servers')">返回服务器</button><button class="btn primary" onclick="remoteNodeForm(false)">＋ 添加节点</button><button class="btn primary" onclick="remoteNodeForm(true)">＋ 添加中转</button></div></div>
+    <div class="toolbar"><input id="search" aria-label="搜索远端节点" placeholder="搜索节点名称、协议、端口…" value="${esc(q)}"></div>
+    <div class="tablewrap"><table><thead><tr><th>ID</th><th>名称</th><th>协议 / 端口</th><th>状态</th><th>上传 / 下载</th><th>操作</th></tr></thead><tbody>
+    ${page.rows.map(x => `<tr><td>${x.id}</td><td>${esc(x.remark)}</td><td><code>${esc(x.protocol)} : ${x.port}</code></td><td>${x.enable ? '启用' : '停用'}</td><td>${formatBytes(x.up || 0)} / ${formatBytes(x.down || 0)}</td><td>
+      <button class="btn small" onclick="remoteNodeEdit(${x.id})">编辑</button><button class="btn small" onclick="remoteNodeToggle(${x.id})">${x.enable ? '停用' : '启用'}</button><button class="btn small" onclick="remoteNodeLinks(${x.id})" ${!x.shareLinks?.length ? 'disabled' : ''}>链接 / 导入</button><button class="btn small danger" onclick="remoteNodeDelete(${x.id})">删除</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无匹配的远端入站</td></tr>'}
+    </tbody></table></div>${pagination(page)}</section>`;
+  bindSearch('remoteNodes', renderRemoteNodes);
+}
+
+function remoteNodeForm(relay) {
+  openModal(relay ? '添加服务器中转' : '添加服务器节点', `<form id="remoteNodeForm"><div class="grid">
+    <div><label for="rnName">节点名称</label><input id="rnName" required maxlength="100" placeholder="例如 香港中转"></div>
+    <div><label for="rnPort">监听端口</label><input id="rnPort" type="number" min="1" max="65535" required value="443"></div>
+    ${relay ? '' : '<div class="span2"><label for="rnTemplate">节点模板</label><select id="rnTemplate"><option value="vless-reality">VLESS + Reality / Vision（免证书）</option><option value="vmess-tcp">VMess + TCP</option><option value="shadowsocks">Shadowsocks AES-128-GCM</option></select></div>'}
+    <div class="span2"><label for="rnSni">Reality 伪装域名</label><input id="rnSni" value="www.microsoft.com" required><p class="hint">仅用于 Reality 模板，应填写该服务器可访问、支持 TLS 的域名。</p></div>
+    ${relay ? '<div class="span2"><label for="rnLanding">落地节点分享链接</label><textarea id="rnLanding" required placeholder="vless://、vmess://、trojan://、ss://、socks5:// 或 http://"></textarea><div class="note">将创建 Reality 入口、落地出站和最高优先级路由。失败时尝试撤回本次创建，并保留配置备份。</div></div>' : ''}
+  </div><label class="inlinecheck"><input id="rnImport" type="checkbox" checked>创建后导入当前订阅</label><div id="remoteError" class="error" role="alert"></div><button id="rnSave" class="btn primary">创建${relay ? '中转' : '节点'}</button></form>`);
+  $('remoteNodeForm').onsubmit = async e => {
+    e.preventDefault(); const serverId = S.serverId, profile = S.profile, autoImport = $('rnImport').checked;
+    let created = false;
+    $('rnSave').disabled = true;
+    const payload = {serverId, remark:val('rnName'),port:val('rnPort'),serverName:val('rnSni'),template:relay ? 'vless-reality' : val('rnTemplate'),landingLink:relay ? val('rnLanding') : undefined};
+    try {
+      const data = await api(relay ? '/servers/relay' : '/servers/inbounds', jsonOpt('POST', payload));
+      created = true;
+      closeModal(); S.remoteLoaded = false;
+      if (S.page === 'serverNodes' && S.serverId === serverId) await serverNodes();
+      if (autoImport && data.shareLinks?.length && S.profile === profile) {
+        try { await importRemoteLinks(data.shareLinks); } catch (error) { return alert('远端节点已创建，但订阅导入失败：'+error.message+'。请从“链接 / 导入”重试导入，不要重复创建。'); }
+      }
+      notice('远端'+(relay ? '中转' : '节点')+'已创建'+(autoImport && S.profile !== profile ? '；当前订阅已切换，未自动导入' : autoImport && !data.shareLinks?.length ? '；未返回兼容链接，请在远端面板核对后导入' : ''));
+    } catch (error) { if (created) alert('远端节点已创建，但刷新列表失败：'+error.message+'。请刷新确认，勿重复创建。'); else if ($('remoteError')) { $('remoteError').textContent = error.message; $('rnSave').disabled = false; } else alert(error.message); }
+  };
+}
+
+function remoteNodeEdit(id) {
+  const row = S.remoteRows.find(x => x.id === id); if (!row) return;
+  const {shareLinks,clientStats,...inbound} = row;
+  openModal('编辑远端入站 JSON', '<form id="remoteEdit"><p class="muted">此处直接修改远端 3x-ui 入站配置，协议设置必须是有效 JSON。</p><textarea id="remoteJson" class="raw" spellcheck="false"></textarea><div id="remoteError" class="error"></div><button id="remoteSave" class="btn primary">保存到远端</button></form>');
+  $('remoteJson').value = JSON.stringify(inbound,null,2);
+  $('remoteEdit').onsubmit = async e => {
+    e.preventDefault(); $('remoteSave').disabled = true;
+    try { await api('/servers/inbounds',jsonOpt('PUT',{serverId:S.serverId,inboundId:id,inbound:JSON.parse($('remoteJson').value)})); closeModal(); await serverNodes(true); notice('远端入站已保存'); }
+    catch (error) { if ($('remoteError')) { $('remoteError').textContent=error.message; $('remoteSave').disabled=false; } }
+  };
+}
+
+async function remoteNodeToggle(id) {
+  const row = S.remoteRows.find(x => x.id === id); if (!row) return;
+  try { await api('/servers/inbounds',jsonOpt('PUT',{serverId:S.serverId,inboundId:id,inbound:{...row,enable:!row.enable}})); await serverNodes(true); }
+  catch (error) { alert(error.message); }
+}
+
+async function remoteNodeDelete(id) {
+  if (!confirm('删除该远端入站？本面板为其创建的中转路由也会清理；已导入订阅的链接需另行清理。')) return;
+  try { await api('/servers/inbounds',jsonOpt('DELETE',{serverId:S.serverId,inboundId:id})); await serverNodes(true); notice('远端入站已删除'); }
+  catch (error) { alert(error.message); }
+}
+
+async function importRemoteLinks(links) {
+  const result = await api('/import-node',jsonOpt('POST',{links:links.join('\n'),addToGroups:true}));
+  if (!result.added || result.failed?.length) throw Error(`导入 ${result.added || 0} 条；${result.failed?.map(x=>x.reason).join('；') || '未找到兼容节点'}`);
+  await reload(false); notice(`已导入 ${result.added} 个节点到当前订阅`);
+}
+
+function remoteNodeLinks(id) {
+  const row = S.remoteRows.find(x => x.id === id); if (!row) return;
+  openModal('远端节点分享链接', '<textarea id="remoteShare" readonly style="min-height:180px"></textarea><div class="toolbar" style="margin-top:14px"><button id="remoteCopy" class="btn">复制链接</button><button id="remoteImport" class="btn primary">导入当前订阅</button></div><div id="remoteImportError" class="error"></div>');
+  $('remoteShare').value = row.shareLinks.join('\n');
+  $('remoteCopy').onclick = () => copyText(row.shareLinks.join('\n'));
+  $('remoteImport').onclick = async () => {
+    $('remoteImport').disabled = true;
+    try { await importRemoteLinks(row.shareLinks); closeModal(); }
+    catch (error) { if ($('remoteImportError')) { $('remoteImportError').textContent=error.message; $('remoteImport').disabled=false; } }
+  };
+}
 
 function trafficSummary() {
   const t = S.data.profile?.traffic || { configured: false };
@@ -2466,6 +2706,8 @@ function openModal(title, html) {
 
 function closeModal() {
   if ($('modal').classList.contains('hidden')) return;
+  $('modal').querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
+  S.jobView = null;
   $('modal').classList.add('hidden');
   document.body.classList.remove('modal-open');
   if (S.modalFocus?.isConnected) S.modalFocus.focus();
@@ -3459,7 +3701,11 @@ $('logout').onclick = () => logout(true);
 $('manageProfiles').onclick = profileManager;
 $('refresh').onclick = async () => {
   try {
-    if (S.page === 'profiles') {
+    if (S.page === 'servers') {
+      await servers();
+    } else if (S.page === 'serverNodes') {
+      await serverNodes(true);
+    } else if (S.page === 'profiles') {
       await loadProfiles();
       if (S.page === 'profiles') profiles();
     } else {

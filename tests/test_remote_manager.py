@@ -1,0 +1,432 @@
+import copy
+import json
+import socket
+import ssl
+import datetime
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+import remote_manager as remote
+import server
+import paramiko
+
+
+PIN = "SHA256:" + "a" * 43
+
+
+class FakeAPI:
+    def __init__(self):
+        self.configuration = {"outbounds": [{"tag": "direct", "protocol": "freedom"}],
+                              "routing": {"rules": [{"type": "field", "outboundTag": "direct", "domain": ["example.com"]}]}}
+        self.rows = []
+        self.calls = []
+        self.fail_restart = False
+
+    def request(self, path, payload=None, **kwargs):
+        self.calls.append((path, copy.deepcopy(payload)))
+        if path.endswith("getNewX25519Cert"):
+            return {"privateKey": "private-test-key", "publicKey": "public-test-key"}
+        if path == "panel/xray/":
+            return json.dumps({"xraySetting": self.configuration, "outboundTestUrl": "https://example.com"})
+        if path == "panel/xray/update":
+            self.configuration = json.loads(payload["xraySetting"])
+            return None
+        if path.endswith("restartXrayService") and self.fail_restart:
+            self.fail_restart = False
+            raise ValueError("Xray config test failed")
+        if path.endswith("inbounds/add"):
+            row = {**payload, "id": len(self.rows) + 1, "tag": "inbound-" + str(payload["port"])}
+            self.rows.append(row)
+            return copy.deepcopy(row)
+        if "/inbounds/del/" in path:
+            identity = int(path.rsplit("/", 1)[1])
+            self.rows = [row for row in self.rows if row["id"] != identity]
+        if path.endswith("inbounds/list"):
+            return copy.deepcopy(self.rows)
+        if "/inbounds/get/" in path:
+            return copy.deepcopy(next(row for row in self.rows if row["id"] == int(path.rsplit("/", 1)[1])))
+        return None
+
+
+class RemoteManagerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.manager = remote.RemoteManager(self.root, server.parse_node_link, server.node_to_uri)
+        self.payload = {"name": "入口服务器", "host": "198.51.100.20", "sshPort": 22, "sshUser": "root",
+                        "sshPassword": "ssh-secret-123", "fingerprint": PIN, "domain": "",
+                        "panelUser": "manager", "panelPassword": "panel-secret-123"}
+        self.identity = self.manager.save(self.payload)["id"]
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_credentials_are_encrypted_persistent_and_never_returned(self):
+        raw = self.manager.path.read_text(encoding="utf-8")
+        self.assertNotIn(self.payload["sshPassword"], raw)
+        self.assertNotIn(self.payload["panelPassword"], raw)
+        public = self.manager.list()[0]
+        self.assertNotIn("sshPassword", public)
+        self.assertNotIn("panelPassword", public)
+        restored = remote.RemoteManager(self.root, server.parse_node_link, server.node_to_uri)
+        self.assertEqual(restored.secret(restored.record(self.identity), "sshPassword"), self.payload["sshPassword"])
+        restored.save({**self.payload, "id": self.identity, "sshPassword": "", "panelPassword": ""})
+        self.assertEqual(restored.secret(restored.record(self.identity), "panelPassword"), self.payload["panelPassword"])
+
+    def test_invalid_targets_domains_ports_and_missing_pin_are_rejected(self):
+        invalid = [{"host": "127.0.0.1"}, {"host": "169.254.169.254"}, {"host": "::1"},
+                   {"host": "a;id"}, {"sshPort": "22;id"}, {"sshPort": 0}, {"fingerprint": ""},
+                   {"domain": "x.example; touch /tmp/oops"}, {"domain": "https://panel.example"},
+                   {"panelPassword": "short"}, {"sshPassword": "secret\ncommand"}]
+        for bad in invalid:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.manager.save({**self.payload, **bad})
+        self.assertEqual(remote.valid_ip("[2001:db8::1]"), "2001:db8::1")
+
+    def test_host_key_mismatch_stops_authentication(self):
+        fake = Mock()
+        policy = []
+        fake.set_missing_host_key_policy.side_effect = policy.append
+        key = Mock()
+        key.asbytes.return_value = b"a different host key"
+        fake.connect.side_effect = lambda *a, **k: policy[0].missing_host_key(fake, "host", key)
+        with patch("paramiko.SSHClient", return_value=fake), self.assertRaisesRegex(ValueError, "指纹"):
+            self.manager.connect(self.manager.record(self.identity))
+        fake.close.assert_called_once()
+
+    def test_real_local_ssh_handshake_pin_and_streaming_execution(self):
+        host_key = paramiko.RSAKey.generate(2048)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(8)
+        executed = []
+
+        class SSHServer(paramiko.ServerInterface):
+            def check_auth_password(self, username, password):
+                return paramiko.AUTH_SUCCESSFUL if username == "root" and password == "ssh-secret-123" else paramiko.AUTH_FAILED
+
+            def get_allowed_auths(self, username):
+                return "password"
+
+            def check_channel_request(self, kind, chanid):
+                return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+
+            def check_channel_exec_request(self, channel, command):
+                executed.append(command)
+
+                def respond():
+                    script = bytearray()
+                    while True:
+                        chunk = channel.recv(8192)
+                        if not chunk:
+                            break
+                        script.extend(chunk)
+                    executed.append(script.decode())
+                    channel.sendall(b"phase one\n")
+                    channel.send_stderr(b"diagnostic stderr\n")
+                    channel.send_exit_status(0)
+                    channel.shutdown_write()
+
+                threading.Thread(target=respond, daemon=True).start()
+                return True
+
+        state = {}
+
+        def serve():
+            connection, _ = listener.accept()
+            transport = paramiko.Transport(connection)
+            state["transport"] = transport
+            transport.add_server_key(host_key)
+            transport.start_server(server=SSHServer())
+            state["channel"] = transport.accept(8)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        record = {**self.manager.record(self.identity), "host": "127.0.0.1", "sshPort": listener.getsockname()[1], "fingerprint": remote.fingerprint(host_key)}
+        ssh = None
+        try:
+            ssh = self.manager.connect(record)
+            lines = []
+            code, output = self.manager.execute(ssh, record, "echo fixture-only", timeout=8, on_line=lines.append)
+            self.assertEqual(code, 0)
+            self.assertIn("phase one", output)
+            self.assertIn("diagnostic stderr", output)
+            self.assertEqual(executed[0], b"bash -s")
+            self.assertIn("echo fixture-only", executed[1])
+        finally:
+            if ssh:
+                ssh.close()
+            if state.get("transport"):
+                state["transport"].close()
+            listener.close()
+            thread.join(3)
+
+    def test_script_modes_and_secret_quoting(self):
+        record = copy.deepcopy(self.manager.record(self.identity))
+        code = remote.install_script(record, "p'$(touch /tmp/not-executed)")
+        self.assertIn("XUI_AUTO=1 bash", code)
+        self.assertIn("curl -fLsS --retry 2", code)
+        self.assertIn("MXIOC_STAGE=credentials", code)
+        self.assertIn("'\"'\"'", code)
+        record["domain"] = "panel.example.com"
+        self.assertIn("XUI_DOMAIN=panel.example.com bash", remote.install_script(record, "password"))
+
+    def test_cli_panel_url_parsing_ipv6_and_https(self):
+        record = {"host": "2001:db8::1", "domain": ""}
+        result = remote.parse_panel_settings("port: 2053\nwebBasePath: /secret-path/\ncert: \nkey: \n", record)
+        self.assertEqual(result["panelUrl"], "http://[2001:db8::1]:2053/secret-path/")
+        record["domain"] = "panel.example.com"
+        result = remote.parse_panel_settings("port: 443\nwebBasePath: key\ncert: /root/cert.pem\n", record)
+        self.assertEqual(result["panelUrl"], "https://panel.example.com:443/key/")
+        with self.assertRaises(ValueError):
+            remote.parse_panel_settings("nothing", record)
+
+    def test_logs_redact_secrets_and_identify_real_failure(self):
+        source = "\x1b[31mPassword: generated-secret\x1b[0m\nAPI Token: bearer-secret\ncurl: (6) Could not resolve host\n" + self.payload["sshPassword"]
+        sanitized = remote.clean_log(source, [self.payload["sshPassword"]])
+        for forbidden in ("generated-secret", "bearer-secret", self.payload["sshPassword"], "\x1b"):
+            self.assertNotIn(forbidden, sanitized)
+        self.assertIn("Could not resolve host", remote.installation_error(sanitized, "download", 6))
+
+    def make_job(self):
+        job = {"id": "test-job", "serverId": self.identity, "status": "running", "stage": "connecting", "log": "", "error": ""}
+        self.manager.data["jobs"].append(job)
+        return job
+
+    def test_install_success_checks_credentials_and_api_before_success(self):
+        job, api = self.make_job(), FakeAPI()
+        record = copy.deepcopy(self.manager.record(self.identity))
+
+        def panel(ssh, item):
+            item.update(panelUrl="http://198.51.100.20:2053/secret/", panelTLS=False)
+            return api
+
+        with patch.object(self.manager, "connect", return_value=Mock()), patch.object(self.manager, "execute", return_value=(0, "")), patch.object(self.manager, "panel", side_effect=panel):
+            self.manager.install_worker(record, job)
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(api.calls[0], ("login", {"username": "manager", "password": self.payload["panelPassword"]}))
+        self.assertEqual(api.calls[1][0], "panel/api/inbounds/list")
+        self.assertIn("panelUrl", job)
+
+    def test_install_failure_keeps_output_and_runs_diagnostics(self):
+        job = self.make_job()
+
+        def execute(ssh, record, script, **kwargs):
+            kwargs["on_line"]("MXIOC_STAGE=download\ncurl: (6) Could not resolve host\nPassword: random-initial-password\n")
+            return 6, ""
+
+        with patch.object(self.manager, "connect", return_value=Mock()), patch.object(self.manager, "execute", side_effect=execute), patch.object(self.manager, "diagnostics", return_value="service: inactive") as diagnostic:
+            self.manager.install_worker(copy.deepcopy(self.manager.record(self.identity)), job)
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(job["exitCode"], 6)
+        self.assertIn("Could not resolve host", job["error"])
+        self.assertIn("inactive", job["log"])
+        self.assertNotIn("random-initial-password", job["log"])
+        diagnostic.assert_called_once()
+
+    def test_domain_install_without_certificate_is_not_reported_success(self):
+        job, api = self.make_job(), FakeAPI()
+        record = {**self.manager.record(self.identity), "domain": "panel.example.com"}
+
+        def panel(ssh, item):
+            item.update(panelTLS=False, panelUrl="http://198.51.100.20:2053/base/")
+            return api
+
+        with patch.object(self.manager, "connect", return_value=Mock()), patch.object(self.manager, "execute", return_value=(0, "")), patch.object(self.manager, "panel", side_effect=panel), patch.object(self.manager, "diagnostics", return_value="certificate failed"):
+            self.manager.install_worker(record, job)
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("证书", job["error"])
+        self.assertIn("panelUrl", job)
+
+    def test_restart_marks_jobs_interrupted_and_disallows_overlap(self):
+        with patch("remote_manager.threading.Thread"):
+            job = self.manager.start_install(self.identity, True)
+        with self.assertRaisesRegex(ValueError, "已有安装"):
+            self.manager.start_install(self.identity, True)
+        with self.assertRaises(ValueError):
+            self.manager.remove(self.identity)
+        restored = remote.RemoteManager(self.root, server.parse_node_link, server.node_to_uri)
+        self.assertEqual(restored.job(job["id"])["status"], "interrupted")
+        with self.assertRaises(ValueError):
+            restored.start_install(self.identity, False)
+
+    def with_fake_api(self, api):
+        return patch.object(self.manager, "with_panel", side_effect=lambda identity, action: action(api, copy.deepcopy(self.manager.record(identity))))
+
+    def test_relay_preserves_existing_config_and_removes_its_own_route(self):
+        api = FakeAPI()
+        original = copy.deepcopy(api.configuration)
+        with self.with_fake_api(api):
+            result = self.manager.create_relay(self.identity, {"remark": "中转", "port": 443,
+                "landingLink": "socks5://user:password@203.0.113.10:1080#landing"})
+            self.assertTrue(result["shareLinks"][0].startswith("vless://"))
+            self.assertEqual(api.configuration["routing"]["rules"][1:], original["routing"]["rules"])
+            self.assertEqual(api.configuration["outbounds"][0], original["outbounds"][0])
+            self.assertEqual(api.configuration["outbounds"][1]["protocol"], "socks")
+            saved = self.manager.record(self.identity)["lastXrayBackup"]
+            self.assertNotIn('"outbounds"', saved)
+            with self.assertRaisesRegex(ValueError, "关联路由"):
+                self.manager.update_inbound(self.identity, result["inbound"]["id"],
+                                            {**result["inbound"], "port": 8443})
+            self.manager.delete_inbound(self.identity, result["inbound"]["id"])
+        self.assertEqual(api.configuration, original)
+        self.assertEqual(api.rows, [])
+
+    def test_relay_failure_compensates_inbound_and_config(self):
+        api = FakeAPI()
+        original = copy.deepcopy(api.configuration)
+        api.fail_restart = True
+        with self.with_fake_api(api), self.assertRaisesRegex(ValueError, "已撤回"):
+            self.manager.create_relay(self.identity, {"remark": "中转", "port": 443,
+                "landingLink": "socks5://user:password@203.0.113.10:1080"})
+        self.assertEqual(api.configuration, original)
+        self.assertEqual(api.rows, [])
+        self.assertFalse(self.manager.record(self.identity).get("relays"))
+
+    def test_unsupported_landing_is_rejected_before_connect(self):
+        with patch.object(self.manager, "connect") as connection, self.assertRaises(ValueError):
+            self.manager.create_relay(self.identity, {"landingLink": "hysteria2://password@203.0.113.10:443"})
+        connection.assert_not_called()
+
+    def test_inbound_templates_export_and_validate(self):
+        api = FakeAPI()
+        for kind in ("vless-reality", "vmess-tcp", "shadowsocks"):
+            payload = remote.build_inbound(api, {"remark": "节点", "port": 443, "template": kind})
+            nodes = remote.inbound_nodes(payload, self.manager.record(self.identity))
+            self.assertEqual(len(nodes), 1)
+            self.assertIn("://", server.node_to_uri(nodes[0]))
+        with self.assertRaises(ValueError):
+            remote.prepare_inbound({"protocol": "vless", "port": 443, "settings": "[]"})
+
+
+class PanelTunnelTests(unittest.TestCase):
+    def test_https_loopback_inside_ssh_tunnel_supports_panel_certificate(self):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"success":true,"obj":[{"id":1}]}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "panel.example.com")])
+            now = datetime.datetime.now(datetime.timezone.utc)
+            certificate = x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key()).serial_number(1).not_valid_before(now-datetime.timedelta(minutes=1)).not_valid_after(now+datetime.timedelta(days=1)).sign(key, hashes.SHA256())
+            cert_path, key_path = Path(temporary)/"certificate.pem", Path(temporary)/"private.pem"
+            cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert_path, key_path)
+            httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            ssh, transport = Mock(), Mock()
+            transport.open_channel.side_effect = lambda *a, **k: socket.create_connection(httpd.server_address)
+            ssh.get_transport.return_value = transport
+            try:
+                api = remote.PanelAPI(ssh, {"host":"198.51.100.1", "domain":"panel.example.com", "panelPort":2053, "panelPath":"/secret/", "panelTLS":True}, "token")
+                self.assertEqual(api.request("panel/api/inbounds/list"), [{"id":1}])
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(3)
+
+    def test_login_fetches_csrf_and_keeps_session_cookie_inside_tunnel(self):
+        received = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def reply(self, value):
+                body = json.dumps({"success": True, "obj": value}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Set-Cookie", "session=test-session; HttpOnly; Path=/")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                received.append((self.path, None, None))
+                self.reply("test-csrf")
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                received.append((self.path, self.headers.get("Cookie"), self.headers.get("X-CSRF-Token")))
+                self.reply(None)
+
+            def log_message(self, *_):
+                pass
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        ssh, transport = Mock(), Mock()
+        transport.open_channel.side_effect = lambda *a, **k: socket.create_connection(httpd.server_address)
+        ssh.get_transport.return_value = transport
+        try:
+            api = remote.PanelAPI(ssh, {"host": "198.51.100.1", "panelPort": 2053, "panelPath": "/secret/", "panelUser": "admin"}, "api-token", "private-password")
+            api.request("panel/xray/", {})
+            self.assertEqual(received[0][0], "/secret/csrf-token")
+            self.assertEqual(received[1], ("/secret/login", "session=test-session", "test-csrf"))
+            self.assertEqual(received[2], ("/secret/panel/xray/", "session=test-session", "test-csrf"))
+            api.request("panel/xray/update", {"xraySetting": "{}"})
+            self.assertEqual(len(received), 4)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(3)
+
+    def test_http_api_stays_on_ssh_loopback_and_sends_bearer_and_form(self):
+        received = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.update(path=self.path, bearer=self.headers.get("Authorization"), host=self.headers.get("Host"),
+                                body=self.rfile.read(int(self.headers["Content-Length"])).decode())
+                body = b'{"success":true,"obj":{"ok":true}}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        transport = Mock()
+        transport.open_channel.side_effect = lambda *a, **k: socket.create_connection(httpd.server_address)
+        ssh = Mock()
+        ssh.get_transport.return_value = transport
+        try:
+            api = remote.PanelAPI(ssh, {"host": "198.51.100.1", "panelPort": 2053, "panelPath": "/secret/"}, "hidden-token")
+            self.assertEqual(api.request("panel/api/inbounds/add", {"settings": {"clients": []}, "enable": True}), {"ok": True})
+            self.assertEqual(transport.open_channel.call_args.args[1], ("127.0.0.1", 2053))
+            self.assertEqual(received["path"], "/secret/panel/api/inbounds/add")
+            self.assertEqual(received["bearer"], "Bearer hidden-token")
+            self.assertEqual(received["host"], "198.51.100.1:2053")
+            self.assertIn("enable=true", received["body"])
+            self.assertIn("settings=", received["body"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(3)
+
+
+if __name__ == "__main__":
+    unittest.main()

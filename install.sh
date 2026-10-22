@@ -492,6 +492,7 @@ install_application() {
     SOURCE_ROOT="$(local_source_root)"
     info "获取 MXIOC 管理后台程序……"
     stage_file server.py
+    stage_file remote_manager.py
     stage_file index.html
     stage_file requirements.txt
     stage_file deploy/mxioc-rule-manager.service
@@ -502,7 +503,9 @@ install_application() {
     stamp="$(date +%Y%m%d-%H%M%S)"
     [[ ! -f "${APP_DIR}/server.py" ]] || cp -- "${APP_DIR}/server.py" "${APP_DIR}/code-backups/server.py.${stamp}"
     [[ ! -f "${APP_DIR}/index.html" ]] || cp -- "${APP_DIR}/index.html" "${APP_DIR}/code-backups/index.html.${stamp}"
+    [[ ! -f "${APP_DIR}/remote_manager.py" ]] || cp -- "${APP_DIR}/remote_manager.py" "${APP_DIR}/code-backups/remote_manager.py.${stamp}"
     install -m 0644 "${STAGE_DIR}/server.py" "${APP_DIR}/server.py"
+    install -m 0644 "${STAGE_DIR}/remote_manager.py" "${APP_DIR}/remote_manager.py"
     install -m 0644 "${STAGE_DIR}/index.html" "${APP_DIR}/index.html"
     install -m 0644 "${STAGE_DIR}/requirements.txt" "${APP_DIR}/requirements.txt"
     install -m 0644 "${STAGE_DIR}/clash.yaml" "${APP_DIR}/templates/clash.yaml"
@@ -622,7 +625,7 @@ uninstall_application() {
         install -d -m 0700 "${backup_dir}"
         tar -czf "${backup_dir}/user-data.tar.gz" \
             /etc/sing-box/subscribe "${APP_DIR}/profiles.json" "${APP_DIR}/profiles" \
-            "${APP_DIR}/backups" /etc/mxioc-rule-manager.auth.json \
+            "${APP_DIR}/backups" "${APP_DIR}/remote" /etc/mxioc-rule-manager.auth.json \
             /etc/mxioc-rule-manager.auth 2>/dev/null || true
         [[ -s "${backup_dir}/user-data.tar.gz" ]] || fatal "用户数据归档失败，已取消卸载。"
         success "用户数据已归档到 ${backup_dir}/user-data.tar.gz"

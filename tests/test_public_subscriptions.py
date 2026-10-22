@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -106,6 +107,22 @@ class PublicSubscriptionTests(unittest.TestCase):
                 urlopen(request, timeout=3)
             self.assertEqual(error.exception.code, 401)
         self.assertFalse(server.traffic_info(server.profile_record())["configured"])
+
+    def test_remote_server_routes_are_authenticated_before_any_connection(self):
+        port = self.httpd.server_address[1]
+        routes = {"GET": ["/servers", "/servers/jobs?id=unknown", "/servers/inbounds?id=unknown"],
+                  "POST": ["/servers", "/servers/probe", "/servers/install", "/servers/test", "/servers/diagnose", "/servers/inbounds", "/servers/relay"],
+                  "PUT": ["/servers", "/servers/inbounds"], "DELETE": ["/servers", "/servers/inbounds"]}
+        with patch.object(server, "remote_manager") as manager:
+            for method, paths in routes.items():
+                for path in paths:
+                    request = Request(f"http://127.0.0.1:{port}/admin/api" + path, method=method,
+                                      data=b'{}' if method != "GET" else None,
+                                      headers={"Origin": f"https://127.0.0.1:{port}", "X-Forwarded-Proto": "https", "Content-Type": "application/json"})
+                    with self.subTest(method=method, path=path), self.assertRaises(HTTPError) as error:
+                        urlopen(request, timeout=3)
+                    self.assertEqual(error.exception.code, 401)
+            manager.assert_not_called()
 
     def test_legacy_clash_alias_is_disabled_after_secure_migration(self):
         profile = server.list_profiles()[0]

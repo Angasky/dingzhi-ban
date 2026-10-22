@@ -103,9 +103,20 @@ GEO_LOCK = threading.RLock()
 GEO_RATE_LOCK = threading.Lock()
 GEO_CACHE = {}
 GEO_NEXT_REQUEST = 0.0
+REMOTE_MANAGERS = {}
+REMOTE_MANAGER_LOCK = threading.RLock()
 CTX = threading.local()
 MAX_BODY = 2 * 1024 * 1024
 MAX_SUBSCRIPTION = 8 * 1024 * 1024
+
+
+def remote_manager():
+    from remote_manager import RemoteManager
+    with REMOTE_MANAGER_LOCK:
+        key = str(ROOT.resolve())
+        if key not in REMOTE_MANAGERS:
+            REMOTE_MANAGERS[key] = RemoteManager(ROOT, parse_node_link, node_to_uri)
+        return REMOTE_MANAGERS[key]
 BUILTINS = {"DIRECT", "REJECT", "REJECT-DROP", "PASS"}
 NON_NODE_GROUPS = {"🛑 广告拦截", "🛡️ 基础广告拦截", "🔥 强力广告拦截"}
 SUPPORTED_NODE_TYPES = {"vless", "tuic", "hysteria2", "trojan", "ss", "vmess", "socks5", "http"}
@@ -272,7 +283,7 @@ def start_uninstall(purge_data=False):
 mkdir -p "{backup_dir}"
 tar -czf "{backup_dir}/user-data.tar.gz" \\
   /etc/sing-box/subscribe /opt/mxioc-rule-manager/profiles.json \\
-  /opt/mxioc-rule-manager/profiles /opt/mxioc-rule-manager/backups \\
+  /opt/mxioc-rule-manager/profiles /opt/mxioc-rule-manager/backups /opt/mxioc-rule-manager/remote \\
   /etc/mxioc-rule-manager.auth.json /etc/mxioc-rule-manager.auth 2>/dev/null || true
 """
     purge = """
@@ -2228,6 +2239,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/api/profiles":
                 self.json_out({"profiles": list_profiles()})
                 return
+            if path == "/admin/api/servers":
+                return self.json_out({"servers": remote_manager().list()})
+            if path in ("/admin/api/servers/jobs", "/admin/api/servers/inbounds"):
+                query = parse_qs(urlparse(self.path).query)
+                identity = (query.get("id") or [""])[0]
+                return self.json_out(remote_manager().job(identity) if path.endswith("/jobs") else remote_manager().inbounds(identity))
             if path == "/admin/api/account":
                 self.json_out({"username": load_auth()["username"]})
                 return
@@ -2315,6 +2332,21 @@ class Handler(BaseHTTPRequestHandler):
             data = self.body()
             if path == "/admin/api/profiles":
                 return self.json_out({"ok": True, "profile": create_profile(data)})
+            if path == "/admin/api/servers":
+                return self.json_out({"ok": True, "server": remote_manager().save(data)})
+            if path == "/admin/api/servers/probe":
+                return self.json_out(remote_manager().probe(data))
+            if path == "/admin/api/servers/test":
+                return self.json_out(remote_manager().test(str(data.get("id", ""))))
+            if path == "/admin/api/servers/install":
+                return self.json_out({"ok": True, "job": remote_manager().start_install(str(data.get("id", "")), data.get("confirmed"))}, 202)
+            if path == "/admin/api/servers/diagnose":
+                manager = remote_manager()
+                return self.json_out({"log": manager.diagnostics(copy.deepcopy(manager.record(str(data.get("id", "")))))})
+            if path == "/admin/api/servers/inbounds":
+                return self.json_out({"ok": True, **remote_manager().create_inbound(str(data.get("serverId", "")), data)})
+            if path == "/admin/api/servers/relay":
+                return self.json_out({"ok": True, **remote_manager().create_relay(str(data.get("serverId", "")), data)})
             if path == "/admin/api/updates/check":
                 return self.json_out({"ok": True, **update_status(force=True)})
             if path == "/admin/api/updates/dismiss":
@@ -2380,6 +2412,11 @@ class Handler(BaseHTTPRequestHandler):
             data = self.body()
             if path == "/admin/api/profiles":
                 return self.json_out({"ok": True, "profile": update_profile(data)})
+            if path == "/admin/api/servers":
+                return self.json_out({"ok": True, "server": remote_manager().save(data)})
+            if path == "/admin/api/servers/inbounds":
+                remote_manager().update_inbound(str(data.get("serverId", "")), data.get("inboundId"), data.get("inbound"))
+                return self.json_out({"ok": True})
             self.select_profile()
             if path == "/admin/api/traffic":
                 return self.json_out({"ok": True, "traffic": update_traffic(data)})
@@ -2408,6 +2445,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/api/profiles":
                 delete_profile(str(data.get("id", "")))
                 return self.json_out({"ok": True})
+            if path == "/admin/api/servers":
+                remote_manager().remove(str(data.get("id", "")))
+                return self.json_out({"ok": True})
+            if path == "/admin/api/servers/inbounds":
+                return self.json_out({"ok": True, **remote_manager().delete_inbound(str(data.get("serverId", "")), data.get("inboundId"))})
             self.select_profile()
             if path == "/admin/api/nodes": mutate_node("DELETE", data)
             elif path == "/admin/api/nodes/bulk":
