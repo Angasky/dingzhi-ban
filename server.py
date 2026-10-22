@@ -1455,6 +1455,25 @@ def node_to_uri(node):
     raise ValueError("不支持转换该协议")
 
 
+def exported_node_link(name):
+    """Return one node as a standard client share link for the active profile."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("节点名称不能为空")
+    doc = read_config(copy_doc=False)
+    node = next((item for item in doc.get("proxies", []) or []
+                 if str(item.get("name", "")) == name), None)
+    if not node:
+        raise ValueError("节点不存在")
+    if node.get("dialer-proxy"):
+        raise ValueError("链式代理无法导出为单节点链接")
+    return {
+        "name": node.get("name", ""),
+        "type": node.get("type", ""),
+        "uri": node_to_uri(node),
+    }
+
+
 def conversion_report(profile_id=None):
     record = profile_record(profile_id)
     doc, _ = get_cached_config(current_files(profile_id)[0])
@@ -2040,6 +2059,9 @@ class Handler(BaseHTTPRequestHandler):
             self.select_profile()
             if path == "/admin/api/snapshot":
                 self.json_out(snapshot())
+            elif path == "/admin/api/nodes/share":
+                query = parse_qs(urlparse(self.path).query)
+                self.json_out(exported_node_link((query.get("name") or [""])[0]))
             elif path == "/admin/api/conversions":
                 self.json_out({"formats": conversion_report()})
             elif path == "/admin/api/raw":

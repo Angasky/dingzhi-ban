@@ -1326,6 +1326,7 @@ function nodes() {
               <td>
                 <button class="btn small" onclick="moveNode(${x.index},-1)" ${x.index === 0 ? 'disabled' : ''} title="上移">[ ↑ ]</button>
                 <button class="btn small" onclick="moveNode(${x.index},1)" ${x.index === S.data.nodes.length - 1 ? 'disabled' : ''} title="下移">[ ↓ ]</button>
+                <button class="btn small primary" onclick="shareNode(${x.index})" title="显示二维码并导出节点链接">[ 二维码/导出 ]</button>
                 <button class="btn small" onclick="nodeModal(${x.index})">[ 编辑 ]</button>
                 <button class="btn small danger" onclick="deleteNode(${x.index})">[ 删除 ]</button>
               </td>
@@ -2538,6 +2539,47 @@ async function copyText(text) {
   } catch {
     prompt('请手动复制以下订阅链接：', text);
   }
+}
+
+async function shareNode(index) {
+  let node = S.data.nodes.find(item => item.index === index);
+  if (!node) return;
+  try {
+    let data = await api('/nodes/share?name=' + encodeURIComponent(node.name));
+    let encodedUri = encodeURIComponent(data.uri);
+    let encodedName = encodeURIComponent(data.name + '.txt');
+    openModal('NODE_SHARE // 单节点二维码与导出', `
+      <div class="qrbox">
+        <img src="/admin/api/qrcode?url=${encodedUri}" alt="${esc(data.name)} 节点二维码">
+        <div>
+          <label>NODE_NAME // 节点名称</label>
+          <b>${esc(data.name)}</b>
+          <div class="hint">${esc(nodeProtocol({ type: data.type, config: node.config }))}</div>
+        </div>
+      </div>
+      <label>NODE_SHARE_LINK // 节点连接</label>
+      <textarea id="nodeShareLink" readonly style="min-height:150px">${esc(data.uri)}</textarea>
+      <div class="note">// 二维码与下方导出的文本包含同一条完整节点连接，可直接导入兼容客户端。</div>
+      <div class="toolbar" style="margin-top:16px">
+        <button type="button" class="btn primary" onclick="copyText(decodeURIComponent('${encodedUri}'))">[ 复制节点连接 ]</button>
+        <button type="button" class="btn" onclick="downloadNodeLink(decodeURIComponent('${encodedName}'), decodeURIComponent('${encodedUri}'))">[ 导出 TXT ]</button>
+      </div>`);
+  } catch (err) {
+    notice(err.message);
+  }
+}
+
+function downloadNodeLink(filename, uri) {
+  let blob = new Blob([uri + '\n'], { type: 'text/plain;charset=utf-8' });
+  let url = URL.createObjectURL(blob);
+  let link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notice('节点连接已导出');
 }
 
 function profileManager() {
