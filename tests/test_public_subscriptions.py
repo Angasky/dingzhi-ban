@@ -79,6 +79,8 @@ class PublicSubscriptionTests(unittest.TestCase):
                         self.assertTrue(response.headers["Profile-Title"].startswith("base64:"))
                         if method == "HEAD":
                             self.assertEqual(response.read(), b"")
+        self.assertEqual(server.traffic_info(server.profile_record())['used'],3072,
+                         'subscription GET/HEAD must never add proxy usage')
 
     def test_usage_validation_disable_and_profile_isolation(self):
         server.load_profiles()

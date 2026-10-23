@@ -23,7 +23,7 @@ const puppeteer=require('puppeteer-core'),fs=require('fs'),path=require('path'),
     if(url==='/servers/sni'){
      const body=JSON.parse(opt.body);scanBatches.push(body.candidates);
      await new Promise(r=>setTimeout(r,30));
-     return {results:body.candidates.map((domain,i)=>({domain,ok:i!==0,latencyMs:90-i,tls:'TLSv1.3',alpn:'h2',error:'unavailable'}))};
+     return {results:body.candidates.map((domain,i)=>({domain,ok:i!==0,realityVerified:i!==0,latencyMs:90-i,tls:'TLSv1.3',alpn:'h2',error:'unavailable'}))};
     }
     throw Error('unexpected request '+url);
    };

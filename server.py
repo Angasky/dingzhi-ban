@@ -656,6 +656,23 @@ def remote_node_identity(row):
     return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def metered_counters(row):
+    """Panel user counters exclude unauthenticated inbound connection overhead."""
+    if not isinstance(row.get('clientStats'), list):
+        return {'up': row.get('up', 0), 'down': row.get('down', 0), 'source': 'inbound'}
+    settings = row.get('settings') or {}
+    settings = json.loads(settings) if isinstance(settings, str) else settings
+    clients = [c for c in settings.get('clients', []) if c.get('enable') is not False]
+    if not clients and row.get('protocol') in ('shadowsocks', 'http', 'socks'):
+        return {'up': row.get('up', 0), 'down': row.get('down', 0), 'source': 'inbound'}
+    if len(clients) != 1 or not clients[0].get('email'):
+        raise ValueError('专属入站缺少唯一的认证用户，已暂停计费')
+    stats = [s for s in row['clientStats'] if s.get('email') == clients[0]['email']]
+    if len(stats) != 1 or any(type(stats[0].get(k)) is not int or stats[0][k] < 0 for k in ('up', 'down')):
+        raise ValueError('认证用户流量计数缺失，已暂停计费，不能当作零或入站总流量')
+    return {'up': stats[0]['up'], 'down': stats[0]['down'], 'source': 'authenticated-client'}
+
+
 def require_dedicated_inbound(row):
     settings = row.get("settings") or {}
     if isinstance(settings, str):
@@ -693,9 +710,10 @@ def bind_remote_node(server_id, inbound_id, profile_id=None):
         require_dedicated_inbound(row)
         manager.ensure_meter(server_id, inbound_id)
         # First binding starts at the current counter, not historic shared usage.
+        reading = metered_counters(row)
         binding = {"serverId": server_id, "inboundId": inbound_id, "name": row.get("remark", ""),
-                   "port": row["port"], "status": "active", "up": row.get("up", 0),
-                   "down": row.get("down", 0), "multiplierUnits": 1000, "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""}
+                   "port": row["port"], "status": "active", "up": reading['up'],
+                   "down": reading['down'], "counterSource": reading['source'], "multiplierUnits": 1000, "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""}
         with LOCK:
             profile_record(profile_id).setdefault("remoteNodes", []).append(binding)
             save_profiles(load_profiles())
@@ -895,12 +913,27 @@ def enforce_profile(profile_id, revoke=True, only_binding=None):
                     mismatches.add((server_id, binding["inboundId"]))
                     continue
                 stored = profile_record(profile_id)["traffic"]
+                try:
+                    reading = metered_counters(row)
+                except ValueError as exc:
+                    current['error'] = str(exc); errors.append(str(exc)); continue
+                old_source = current.get('counterSource', 'inbound')
+                current['error'] = ''
+                current['lastSampleAt'] = int(time.time())
+                current['lastRawDelta'] = 0
+                if old_source not in (reading['source'], 'pending'):
+                    # Counter namespaces have different baselines. Switching must
+                    # never interpret a lower user total as a reset and bill it again.
+                    current.update(up=reading['up'], down=reading['down'], counterSource=reading['source'])
+                    continue
+                current['counterSource'] = reading['source']
                 for remote_key, local_key in (("up", "upload"), ("down", "download")):
-                    value = row.get(remote_key, 0)
+                    value = reading[remote_key]
                     if type(value) is not int or value < 0:
                         raise ValueError("服务器流量计数无效")
                     previous = current.get(remote_key, 0)
                     delta = value - previous if value >= previous else value
+                    current['lastRawDelta'] += delta
                     units = current.get("multiplierUnits", stored.get("multiplierUnits", 1000))
                     billed, remainder = divmod(delta * units + current.get(local_key + "Remainder", 0), 1000)
                     stored[local_key] = stored.get(local_key, 0) + min(billed, max(0, 9_007_199_254_740_991 - stored.get("upload", 0) - stored.get("download", 0)))
@@ -980,7 +1013,7 @@ def create_owned_remote(payload, relay=False):
             with LOCK:
                 profile_record(profile_id).setdefault("remoteNodes", []).append({
                     "serverId": server_id, "inboundId": row["id"], "name": row.get("remark", ""),
-                    "port": row["port"], "status": "active", "up": 0, "down": 0,
+                    "port": row["port"], "status": "active", "up": 0, "down": 0, "counterSource": "pending",
                     "multiplierUnits": 1000, "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""})
                 save_profiles(load_profiles())
             if (profile_record(profile_id).get("traffic") or {}).get("enforce"):

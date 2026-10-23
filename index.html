@@ -2308,7 +2308,7 @@ function remoteNodeForm(relay) {
     e.preventDefault(); const serverId = S.serverId, profile = S.profile, autoImport = $('rnImport').checked;
     let created = false;
     $('rnSave').disabled = true;
-    const payload = {serverId, certFile:$('rnCert')?.value, keyFile:$('rnKey')?.value, path:$('rnPath')?.value, remark:val('rnName'),port:val('rnPort'),serverName:val('rnSni'),template:relay ? 'vless-reality' : val('rnTemplate'),landingLink:relay ? val('rnLanding') : undefined};
+    const payload = {serverId, certFile:$('rnCert')?.value, keyFile:$('rnKey')?.value, path:$('rnPath')?.value, remark:val('rnName'),port:val('rnPort'),serverName:val('rnSni'),sniVerified:$('rnSni')?.dataset.sniVerified === val('rnSni'),template:relay ? 'vless-reality' : val('rnTemplate'),landingLink:relay ? val('rnLanding') : undefined};
     try {
       const data = await api(relay ? '/servers/relay' : '/servers/inbounds', jsonOpt('POST', payload));
       created = true;
@@ -2354,16 +2354,18 @@ function openSniScanner(serverId,targetId) {
   const dialog=document.createElement('dialog'); dialog.id='sniScanner'; dialog.className='sni-dialog';
   const view={dialog,target,focus:document.activeElement,controller:new AbortController(),results:[],running:false};
   S.sniScan=view;
-  dialog.innerHTML=`<div class="sni-dialog-head"><div><h3>${uiIcon('gauge')}SNI 延迟扫描</h3><p class="hint">目标服务器发起 DNS、TCP 与 TLS 1.3 握手；成功不等同于完整 Reality 连通验证。</p></div><button type="button" class="btn" id="sniClose" aria-label="关闭 SNI 扫描">${uiIcon('x')}</button></div><div class="sni-dialog-body"><details><summary>自定义扫描列表 · 内置 ${sniCandidates().length} 个候选</summary><label for="sniScanList">每行一个域名，最多 200 个</label><textarea id="sniScanList" rows="5">${esc(sniCandidates().join('\n'))}</textarea></details><div class="panel-head"><span id="sniProgress" role="status" aria-live="polite">准备扫描</span><button class="btn" type="button" id="sniRescan">${uiIcon('refresh-cw')}重新扫描</button></div><progress id="sniScanProgress" max="100" value="0" aria-label="扫描进度"></progress><div class="sni-results" id="sniScanResults"></div></div><div class="sni-dialog-foot"><span class="hint">按延迟排序，仅成功结果可选。关闭窗口即停止后续批次。</span><button class="btn" type="button" id="sniCancel">取消</button></div>`;
+  dialog.innerHTML=`<div class="sni-dialog-head"><div><h3>${uiIcon('gauge')}SNI 延迟扫描</h3><p class="hint">先检测 TLS，再用隔离内核完成两次 Reality 实测。失败目标默认隐藏，不使用生产节点或计费端口。</p></div><button type="button" class="btn" id="sniClose" aria-label="关闭 SNI 扫描">${uiIcon('x')}</button></div><div class="sni-dialog-body"><details><summary>自定义扫描列表 · 内置 ${sniCandidates().length} 个候选</summary><label for="sniScanList">每行一个域名，最多 200 个</label><textarea id="sniScanList" rows="5">${esc(sniCandidates().join('\n'))}</textarea></details><div class="panel-head"><span id="sniProgress" role="status" aria-live="polite">准备扫描</span><button class="btn" type="button" id="sniRescan">${uiIcon('refresh-cw')}重新扫描</button></div><progress id="sniScanProgress" max="100" value="0" aria-label="扫描进度"></progress><div class="sni-results" id="sniScanResults"></div></div><div class="sni-dialog-foot"><span class="hint">仅 Reality 实测通过的目标可选；结果不保证所有客户端和未来网络状态。关闭窗口即停止后续批次。</span><button class="btn" type="button" id="sniCancel">取消</button></div>`;
   document.body.append(dialog); dialog.showModal();
   dialog.addEventListener('cancel',event=>{event.preventDefault();closeSniScanner();});
   $('sniClose').onclick=$('sniCancel').onclick=closeSniScanner;
   const valid=()=>S.sniScan===view && target.isConnected && dialog.open;
   const render=()=>{
-    const sorted=[...view.results].sort((a,b)=>Number(b.ok)-Number(a.ok)||(a.latencyMs??Infinity)-(b.latencyMs??Infinity));
-    $('sniScanResults').innerHTML=sorted.map(r=>`<div class="sni-result"><div><strong>${esc(r.domain)}</strong><small>${r.ok?esc(r.tls)+' · '+esc(r.alpn || '无 ALPN'):esc(r.error || '不可用')}</small></div><span class="${r.ok?'sni-latency':'hint'}">${r.ok?esc(r.latencyMs)+' ms':'失败'}</span><button type="button" class="btn small" data-sni-domain="${esc(r.domain)}" ${r.ok?'':'disabled'}>选择</button></div>`).join('');
+    const sorted=[...view.results].sort((a,b)=>(a.latencyMs??Infinity)-(b.latencyMs??Infinity));
+    const usable=sorted.filter(r=>r.ok && r.realityVerified), failed=sorted.filter(r=>!r.ok || !r.realityVerified);
+    const row=r=>`<div class="sni-result"><div><strong>${esc(r.domain)}</strong><small>${r.ok && r.realityVerified ? esc(r.tls)+' · Reality 双次实测通过' : esc(r.error || '未通过实际 Reality 验证')}</small></div><span class="${r.ok && r.realityVerified?'sni-latency':'hint'}">${r.ok && r.realityVerified?esc(r.latencyMs)+' ms':'不可选'}</span><button type="button" class="btn small" data-sni-domain="${esc(r.domain)}" ${r.ok && r.realityVerified?'':'disabled'}>选择</button></div>`;
+    $('sniScanResults').innerHTML=usable.map(row).join('')+(failed.length?`<details class="sni-failures"><summary>已隐藏 ${failed.length} 个未通过验证的目标 · 查看原因</summary>${failed.map(row).join('')}</details>`:'');
     dialog.querySelectorAll('[data-sni-domain]').forEach(button=>button.onclick=()=>{
-      if(valid()) {target.value=button.dataset.sniDomain;target.dispatchEvent(new Event('input',{bubbles:true}));closeSniScanner();}
+      if(valid()) {target.value=button.dataset.sniDomain;target.dataset.sniVerified=button.dataset.sniDomain;target.dispatchEvent(new Event('input',{bubbles:true}));closeSniScanner();}
     });
   };
   const scan=async()=>{
@@ -2371,11 +2373,11 @@ function openSniScanner(serverId,targetId) {
     const candidates=[...new Set($('sniScanList').value.split(/\s+/).filter(Boolean))];
     if(!candidates.length || candidates.length>200) { $('sniProgress').textContent='请填写 1–200 个候选域名'; return; }
     view.running=true;view.results=[];view.errors=[];render();$('sniRescan').disabled=true;
-    const queue=[];for(let i=0;i<candidates.length;i+=20)queue.push(candidates.slice(i,i+20));
+    const queue=[];for(let i=0;i<candidates.length;i+=5)queue.push(candidates.slice(i,i+5));
     let completed=0;
-    const progress=()=>{$('sniProgress').textContent=`已测试 ${completed} / ${candidates.length} · 可用 ${view.results.filter(r=>r.ok).length}${view.errors.length?' · '+view.errors.join('；'):''}`;$('sniScanProgress').value=completed/candidates.length*100;};
+    const progress=()=>{$('sniProgress').textContent=`已测试 ${completed} / ${candidates.length} · Reality 可用 ${view.results.filter(r=>r.ok && r.realityVerified).length}${view.errors.length?' · '+view.errors.join('；'):''}`;$('sniScanProgress').value=completed/candidates.length*100;};
     progress();
-    await Promise.all(Array.from({length:Math.min(2,queue.length)},async()=>{
+    await Promise.all(Array.from({length:Math.min(1,queue.length)},async()=>{
       while(queue.length && valid()) {
         const batch=queue.shift();
         try {const data=await api('/servers/sni',{...jsonOpt('POST',{serverId,candidates:batch}),signal:view.controller.signal});if(!valid())return;view.results.push(...data.results);}
@@ -2700,7 +2702,7 @@ function traffic() {
       <div><label for="trafficDownload">已用下载计费流量</label><input id="trafficDownload" type="number" min="0" step="any" required value="${(t.download || 0) / unit}"></div>
       <div class="span2"><label for="trafficExpire">到期时间（当前设备本地时间）</label><input id="trafficExpire" type="datetime-local" step="1" value="${dateValue}"><p class="hint">留空表示长期有效；已用流量为上传与下载之和。客户端是否显示额度取决于其版本。</p></div>
     </div><label class="inlinecheck"><input id="trafficEnforce" type="checkbox" ${t.enforce || !t.configured ? 'checked' : ''}>启用服务器强制限制（会删除本订阅专属入站）</label><p class="hint">独立 Xray / sing-box 启用计量前需在远端安装 nftables。计量包含网络协议开销；阈值存在巡检延迟，离线服务器的撤销会持续重试。请勿把其他用户共用入站绑定到此订阅。</p><div class="toolbar"><button id="trafficSync" class="btn" type="button">立即同步用量 / 重试撤销</button></div>
-    <div class="tablewrap"><table><thead><tr><th>专属入站</th><th>服务器 / ID</th><th>状态 / 限速</th><th>操作 / 错误</th></tr></thead><tbody>${(t.bindings || []).map(b => `<tr><td>${esc(b.name || '')} : ${b.port}</td><td>${esc(b.serverId)} / ${b.inboundId}</td><td>${esc(b.status)} · ${esc((b.multiplierUnits ?? ((t.multiplier ?? 1) * 1000)) / 1000)} 倍<div class="hint">${bandwidthLabel(b.bandwidth)}</div></td><td><button type="button" class="btn small" onclick="nodeBandwidthModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点带宽限制</button><button type="button" class="btn small" onclick="nodeMultiplierModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点流量倍率</button><div class="error">${esc(b.error || '')}</div></td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚未绑定服务器入站，请到服务器节点创建或绑定专属入站</td></tr>'}</tbody></table></div>${t.enforcementError ? `<p class="error">${esc(t.enforcementError)}</p>` : ''}
+    <div class="tablewrap"><table><thead><tr><th>专属入站</th><th>服务器 / ID</th><th>状态 / 限速</th><th>操作 / 错误</th></tr></thead><tbody>${(t.bindings || []).map(b => `<tr><td>${esc(b.name || '')} : ${b.port}</td><td>${esc(b.serverId)} / ${b.inboundId}</td><td>${esc(b.status)} · ${esc((b.multiplierUnits ?? ((t.multiplier ?? 1) * 1000)) / 1000)} 倍<div class="hint">${bandwidthLabel(b.bandwidth)}</div><div class="hint">${b.counterSource === 'authenticated-client' ? '认证用户流量' : b.counterSource === 'pending' ? '等待首次采集' : '入站/端口流量（含连接开销）'} · 本次采集 ${formatBytes(b.lastRawDelta || 0)}${b.lastSampleAt ? ' · '+esc(new Date(b.lastSampleAt * 1000).toLocaleTimeString('zh-CN')) : ''}</div></td><td><button type="button" class="btn small" onclick="nodeBandwidthModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点带宽限制</button><button type="button" class="btn small" onclick="nodeMultiplierModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点流量倍率</button><div class="error">${esc(b.error || '')}</div></td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚未绑定服务器入站，请到服务器节点创建或绑定专属入站</td></tr>'}</tbody></table></div>${t.enforcementError ? `<p class="error">${esc(t.enforcementError)}</p>` : ''}
     <div id="trafficError" class="error" role="alert"></div><div class="toolbar">
       <button id="trafficSave" class="btn primary" type="submit">保存并同步订阅信息</button>
       <button id="trafficDisable" class="btn" type="button" ${!t.configured ? 'disabled' : ''}>关闭限制与信息展示</button>
@@ -3154,7 +3156,7 @@ async function chainModal(index) {
     if (button) button.disabled = true;
     try {
       let body = {
-        mode: val('chainMode'), port: val('chainPort'), serverName: val('chainSni'),
+        mode: val('chainMode'), port: val('chainPort'), serverName: val('chainSni'), sniVerified:$('chainSni')?.dataset.sniVerified === val('chainSni'),
         name: val('chainName'),
         entry: val('chainEntry'),
         exit: val('chainExit'),

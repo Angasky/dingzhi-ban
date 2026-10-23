@@ -496,6 +496,7 @@ install_application() {
     stage_file bandwidth.py
     stage_file client_adapter.py
     stage_file core_adapter.py
+    stage_file reality_probe.py
     stage_file server_monitor.py
     stage_file index.html
     stage_file requirements.txt
@@ -508,7 +509,7 @@ install_application() {
     [[ ! -f "${APP_DIR}/server.py" ]] || cp -- "${APP_DIR}/server.py" "${APP_DIR}/code-backups/server.py.${stamp}"
     [[ ! -f "${APP_DIR}/index.html" ]] || cp -- "${APP_DIR}/index.html" "${APP_DIR}/code-backups/index.html.${stamp}"
     [[ ! -f "${APP_DIR}/remote_manager.py" ]] || cp -- "${APP_DIR}/remote_manager.py" "${APP_DIR}/code-backups/remote_manager.py.${stamp}"
-    for adapter in client_adapter.py core_adapter.py server_monitor.py bandwidth.py; do
+    for adapter in client_adapter.py core_adapter.py server_monitor.py bandwidth.py reality_probe.py; do
       [[ ! -f "${APP_DIR}/${adapter}" ]] || cp -- "${APP_DIR}/${adapter}" "${APP_DIR}/code-backups/${adapter}.${stamp}"
     done
     install -m 0644 "${STAGE_DIR}/server.py" "${APP_DIR}/server.py"
@@ -516,6 +517,7 @@ install_application() {
     install -m 0644 "${STAGE_DIR}/bandwidth.py" "${APP_DIR}/bandwidth.py"
     install -m 0644 "${STAGE_DIR}/client_adapter.py" "${APP_DIR}/client_adapter.py"
     install -m 0644 "${STAGE_DIR}/core_adapter.py" "${APP_DIR}/core_adapter.py"
+    install -m 0644 "${STAGE_DIR}/reality_probe.py" "${APP_DIR}/reality_probe.py"
     install -m 0644 "${STAGE_DIR}/remote_manager.py" "${APP_DIR}/remote_manager.py"
     install -m 0644 "${STAGE_DIR}/index.html" "${APP_DIR}/index.html"
     install -m 0644 "${STAGE_DIR}/requirements.txt" "${APP_DIR}/requirements.txt"

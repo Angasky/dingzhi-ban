@@ -173,6 +173,7 @@ class CoreAdapterTests(unittest.TestCase):
                 exec(compile(probe, '<remote-sni-probe>', 'exec'), {})
             return 0, output.getvalue()
         self.manager.execute = Mock(side_effect=execute)
+        self.manager.verify_reality_snis = Mock(side_effect=lambda ssh, record, result: result)
         result = self.manager.test_sni(self.identity, ['public.example.com', 'private.example.com'])
         public, private = result['results']
         self.assertTrue(public['ok'])
@@ -195,10 +196,34 @@ class CoreAdapterTests(unittest.TestCase):
             self.assertNotIn('private.example.com',script)
             return 0,'0.123'
         self.manager.execute=Mock(side_effect=execute)
+        self.manager.verify_reality_snis=Mock(side_effect=lambda ssh,record,result:result)
         result=self.manager.test_sni(self.identity,['public.example.com','private.example.com'])
         self.assertEqual(result['method'],'curl')
         self.assertEqual(result['results'][0]['latencyMs'],123)
         self.assertFalse(result['results'][1]['ok'])
+
+    def test_tls_success_is_not_enough_for_reality_selection(self):
+        self.initialize('xray')
+        self.manager.execute=Mock(return_value=(14,''))
+        data={'results':[{'domain':'public.example.com','ok':True,'address':'8.8.8.8','latencyMs':10}]}
+        result=self.manager.verify_reality_snis(Mock(),self.manager.record(self.identity),data)
+        self.assertFalse(result['results'][0]['ok'])
+        self.assertFalse(result['results'][0]['realityVerified'])
+        self.assertIn('两次',result['results'][0]['error'])
+
+    def test_reality_probe_is_loopback_only_cached_and_has_cleanup(self):
+        self.initialize('xray')
+        self.manager.execute=Mock(return_value=(0,'MXIOC_REALITY_OK\n'))
+        row={'domain':'public.example.com','ok':True,'address':'8.8.8.8'}
+        for _ in range(2):
+            result=self.manager.verify_reality_snis(Mock(),self.manager.record(self.identity),{'results':[row]})
+            self.assertTrue(result['results'][0]['realityVerified'])
+        self.manager.execute.assert_called_once()
+        script=self.manager.execute.call_args.args[2]
+        self.assertIn('trap cleanup EXIT',script);self.assertIn('timeout 18',script)
+        self.assertIn('for attempt in 1 2',script);self.assertIn('reality-probe.invalid',script)
+        self.assertNotIn('0.0.0.0',script)
+        subprocess.run(['bash','-n'],input=script,text=True,check=True)
 
 
 if __name__ == '__main__':

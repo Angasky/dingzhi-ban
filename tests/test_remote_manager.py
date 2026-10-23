@@ -372,6 +372,20 @@ class RemoteManagerTests(unittest.TestCase):
             self.assertEqual(json.loads(body['streamSettings'])['realitySettings']['target'],'raw.githubusercontent.com:443')
         self.assertGreater(len(ports),1)
 
+    def test_verified_sni_uses_pinned_target_and_expired_result_is_rejected(self):
+        import time
+        record=self.manager.record(self.identity)
+        key=(record['id'],record.get('fingerprint'),'raw.githubusercontent.com','8.8.8.8')
+        self.manager.sni_cache[key]=(time.monotonic(),True)
+        payload=self.manager.verified_template_payload(record,{'remark':'verified','port':24443,'sniVerified':True})
+        body=remote.build_inbound(FakeAPI(),payload)
+        reality=json.loads(body['streamSettings'])['realitySettings']
+        self.assertEqual(reality['target'],'8.8.8.8:443')
+        self.assertEqual(reality['serverNames'],['raw.githubusercontent.com'])
+        self.manager.sni_cache.clear()
+        with self.assertRaisesRegex(ValueError,'过期'):
+            self.manager.verified_template_payload(record,{'sniVerified':True})
+
 
 class PanelTunnelTests(unittest.TestCase):
     def test_https_loopback_inside_ssh_tunnel_supports_panel_certificate(self):

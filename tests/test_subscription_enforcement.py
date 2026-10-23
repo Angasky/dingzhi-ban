@@ -61,6 +61,31 @@ class EnforcementTests(unittest.TestCase):
         server.enforce_profile('clash')
         self.assertEqual(server.traffic_info(server.profile_record())['used'], 330)
 
+    def test_user_counter_migration_never_bills_old_total_or_inbound_noise(self):
+        record=self.configure(total=10000)
+        binding=record['remoteNodes'][0];binding.update(up=9000,down=1000)
+        row=self.manager.inbounds.return_value['inbounds'][0]
+        row.update(up=10000,down=2000,settings={'clients':[{'email':'owned','enable':True}]},
+                   clientStats=[{'email':'owned','up':300,'down':200}])
+        server.enforce_profile('clash')
+        self.assertEqual(server.traffic_info(record)['used'],0)
+        self.assertEqual(binding['counterSource'],'authenticated-client')
+        row.update(up=20000,down=4000)
+        server.enforce_profile('clash')
+        self.assertEqual(server.traffic_info(record)['used'],0)
+        row['clientStats'][0]['up']=310
+        server.enforce_profile('clash')
+        self.assertEqual(server.traffic_info(record)['used'],10)
+        self.assertEqual(binding['lastRawDelta'],10)
+
+    def test_missing_user_counters_pause_billing_instead_of_charging_inbound(self):
+        record=self.configure()
+        self.manager.inbounds.return_value['inbounds'][0].update(up=999,down=999,
+            settings={'clients':[{'email':'owned'}]},clientStats=[])
+        server.enforce_profile('clash')
+        self.assertEqual(server.traffic_info(record)['used'],0)
+        self.assertIn('计数缺失',record['enforcementError'])
+
     def test_detach_server_preserves_remote_and_stops_local_enforcement(self):
         self.configure()
         self.manager.record.return_value = {'bandwidths': {'1': {}}}

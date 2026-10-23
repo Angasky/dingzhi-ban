@@ -431,6 +431,7 @@ class PanelSessionExpired(ValueError):
 class RemoteManager:
     def __init__(self, root, parse_link, node_uri):
         self.panel_sessions = {}
+        self.sni_cache, self.sni_slots = {}, {}
         _, Fernet = libraries()
         self.root = Path(root) / "remote"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -1098,7 +1099,7 @@ def probe(name):
             raw.connect(address)
             with context.wrap_socket(raw, server_hostname=name) as tls:
                 result.update(ok=True, latencyMs=round((time.monotonic()-start)*1000, 1),
-                              tls=tls.version(), alpn=tls.selected_alpn_protocol())
+                              tls=tls.version(), alpn=tls.selected_alpn_protocol(), address=address[0])
     except Exception as exc:
         result['error'] = str(exc)[:180]
     return result
@@ -1110,8 +1111,10 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
         try:
             code, raw = self.execute(ssh, record, "python3 - <<'MXIOC_SNI'\n" + probe.replace('CANDIDATES', encoded) + "\nMXIOC_SNI", timeout=40)
             if code:
-                return self.test_sni_curl(ssh, record, domains)
-            return {"results": json.loads(raw)}
+                result = self.test_sni_curl(ssh, record, domains)
+            else:
+                result = {"results": json.loads(raw)}
+            return self.verify_reality_snis(ssh, record, result)
         finally:
             ssh.close()
 
@@ -1146,7 +1149,7 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
                 if code:
                     result["error"] = "TLS 1.3 握手或证书校验失败：" + output[:160]
                 else:
-                    result.update(ok=True, tls="TLSv1.3", latencyMs=round(float(output.strip()) * 1000, 1))
+                    result.update(ok=True, tls="TLSv1.3", latencyMs=round(float(output.strip()) * 1000, 1), address=address)
             except Exception as exc:
                 result["error"] = str(exc)[:160]
             return result
@@ -1154,9 +1157,55 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
             rows = list(pool.map(probe, domains))
         return {"results": sorted(rows, key=lambda row: row.get("latencyMs", 1e9)), "method": "curl"}
 
+    def verify_reality_snis(self, ssh, record, result):
+        import concurrent.futures
+        from reality_probe import probe_script
+        with self.lock:
+            slots = self.sni_slots.setdefault(record['id'], threading.BoundedSemaphore(2))
+        def verify(row):
+            row = dict(row)
+            row['realityVerified'] = False
+            if not row.get('ok'):
+                return row
+            row['ok'] = False
+            if install_type(record) == 'sing-box':
+                row['error'] = '当前 sing-box 尚无实际 Reality 验证器，未列入可选结果'
+                return row
+            address = row.get('address')
+            try:
+                if not address or not ipaddress.ip_address(address).is_global:
+                    raise ValueError('缺少已验证的公网目标地址')
+                key = (record['id'], record.get('fingerprint'), row['domain'], address)
+                with slots:
+                    with self.lock:
+                        cached = self.sni_cache.get(key)
+                    if cached and time.monotonic() - cached[0] < 120:
+                        verified = cached[1]
+                    else:
+                        code, output = self.execute(ssh, record, probe_script(row['domain'], address), timeout=25)
+                        if code == 12:
+                            raise ValueError('服务器缺少 curl 或 timeout，暂不能完成实际验证')
+                        if code == 13:
+                            raise ValueError('服务器未安装可用的 Xray 验证内核，请先安装面板或 Xray')
+                        verified = code == 0 and 'MXIOC_REALITY_OK' in output
+                        with self.lock:
+                            if len(self.sni_cache) >= 512:
+                                self.sni_cache.pop(next(iter(self.sni_cache)))
+                            self.sni_cache[key] = (time.monotonic(), verified)
+                row.update(ok=verified, realityVerified=verified)
+                if not verified:
+                    row['error'] = 'TLS 可连接，但两次实际 Reality 握手未通过；不提供选择'
+            except Exception as exc:
+                row['error'] = 'Reality 验证未完成：' + str(exc)[:160]
+            row.pop('address', None)
+            return row
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            result['results'] = list(pool.map(verify, result['results']))
+        return result
+
     def create_inbound(self, server_id, payload):
         def action(api, record):
-            body = prepare_inbound(payload["inbound"]) if "inbound" in payload else build_inbound(api, payload)
+            body = prepare_inbound(payload["inbound"]) if "inbound" in payload else build_inbound(api, self.verified_template_payload(record, payload))
             created = api.request("panel/api/inbounds/add", body)
             if not isinstance(created, dict) or not created.get("id"):
                 raise ValueError("3x-ui 返回的新增入站结果缺少 ID，请刷新列表核对，勿重复提交")
@@ -1168,6 +1217,23 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
                 pass
             return result
         return self.with_panel(server_id, action)
+
+    def verified_template_payload(self, record, payload):
+        """Use the actual public endpoint that passed the scan, not a fresh DNS pick."""
+        result = dict(payload)
+        result.pop('_verifiedRealityAddress', None)
+        if result.get('template', 'vless-reality') != 'vless-reality':
+            return result
+        domain = valid_domain(result.get('serverName', 'raw.githubusercontent.com'))
+        with self.lock:
+            matches = [key[3] for key, value in self.sni_cache.items()
+                       if key[:3] == (record['id'], record.get('fingerprint'), domain)
+                       and value[1] and time.monotonic() - value[0] < 120]
+        if matches:
+            result['_verifiedRealityAddress'] = matches[0]
+        elif result.get('sniVerified') is True:
+            raise ValueError('SNI 实测结果已过期或服务器状态已变化，请重新扫描后创建')
+        return result
 
     def update_inbound(self, server_id, inbound_id, payload):
         inbound_id = positive_id(inbound_id)
@@ -1255,7 +1321,7 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
         def action(api, record):
             original, wrapper = read_xray(api)
             self.backup_xray(server_id, original)
-            body = build_inbound(api, {**payload, "template": "vless-reality"})
+            body = build_inbound(api, self.verified_template_payload(record, {**payload, "template": "vless-reality"}))
             created = api.request("panel/api/inbounds/add", body)
             if not isinstance(created, dict) or not created.get("id") or not created.get("tag"):
                 raise ValueError("中转入口返回的 ID/tag 不完整，请到入站列表核对")
@@ -1328,7 +1394,13 @@ def build_inbound(api, payload):
             raise ValueError("3x-ui 未返回可用的 Reality 密钥")
         client["flow"] = "xtls-rprx-vision"
         protocol, settings = "vless", {"clients": [client], "decryption": "none", "fallbacks": []}
-        stream.update(security="reality", realitySettings={"show": False, "xver": 0, "target": sni + ":443",
+        target = sni + ':443'
+        if payload.get('_verifiedRealityAddress'):
+            address = ipaddress.ip_address(payload['_verifiedRealityAddress'])
+            if not address.is_global:
+                raise ValueError('已验证的 Reality 目标必须为公网地址')
+            target = (f'[{address}]' if address.version == 6 else str(address)) + ':443'
+        stream.update(security="reality", realitySettings={"show": False, "xver": 0, "target": target,
                       "serverNames": [sni], "privateKey": keys["privateKey"], "shortIds": [secrets.token_hex(8)],
                       "settings": {"publicKey": keys["publicKey"], "fingerprint": "chrome", "serverName": sni, "spiderX": "/"}})
     elif template in ("trojan-tls", "vless-ws-tls", "hysteria2", "tuic"):
