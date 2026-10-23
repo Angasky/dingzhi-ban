@@ -481,7 +481,7 @@ textarea {
   gap: 8px;
 }
 .top h2::before {
-  content: '▶';
+  content: none;
   font-size: 12px;
   color: var(--blue);
 }
@@ -911,7 +911,7 @@ code {
   gap: 8px;
 }
 .toast::before {
-  content: '✓';
+  content: none;
   color: var(--blue);
   font-weight: bold;
 }
@@ -1263,6 +1263,44 @@ html:not([data-theme="high"]) .error::before { content: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+.host-overview-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-bottom:18px; }
+.host-card { display:flex; flex-direction:column; text-align:left; gap:14px; min-width:0; padding:22px; color:var(--text); background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font:inherit; }
+.host-card:hover,.host-card:focus-visible { border-color:var(--blue); outline:2px solid transparent; }
+.host-card-heading { display:flex; align-items:center; gap:10px; }
+.host-card-heading strong { flex:1; overflow-wrap:anywhere; }
+.host-address { display:block; color:var(--text-muted); font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.host-summary { display:flex; flex-direction:column; gap:16px; }
+.host-state { font-size:12px; color:var(--blue-bright); }
+.host-mini-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.host-mini-metrics>span { display:flex; flex-direction:column; gap:7px; color:var(--text-muted); font-size:12px; }
+.host-mini-metrics strong { color:var(--text); font-size:17px; }
+.host-detail-title { margin:18px 0 8px; }
+.sni-field { display:flex; gap:12px; align-items:center; }
+.sni-field input { flex:1; min-width:0; margin:0; }
+.sni-field .btn { margin:0; white-space:nowrap; }
+#remoteNodeForm>.grid { gap:22px 20px; }
+#remoteNodeForm label { display:block; margin-bottom:9px; }
+#remoteNodeForm .inlinecheck { display:flex; margin:22px 0; }
+#remoteNodeForm textarea { min-height:110px; }
+.sni-dialog { width:min(760px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:0; color:var(--text); background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-sm); box-shadow:0 24px 80px rgb(0 0 0 / .3); }
+.sni-dialog::backdrop { background:rgb(0 0 0 / .5); }
+.sni-dialog-head,.sni-dialog-foot { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:20px 24px; }
+.sni-dialog-head { border-bottom:1px solid var(--border); }
+.sni-dialog-head h3 { display:flex; align-items:center; gap:10px; margin:0 0 8px; }
+.sni-dialog-body { padding:20px 24px; overflow-y:auto; max-height:calc(100dvh - 280px); }
+.sni-dialog-body details { margin-bottom:20px; }
+.sni-dialog-body summary { cursor:pointer; color:var(--text-muted); margin-bottom:12px; }
+.sni-dialog-body progress { width:100%; height:6px; accent-color:var(--blue); }
+.sni-dialog-body .panel-head { flex-wrap:wrap; }
+#sniProgress { min-width:0; overflow-wrap:anywhere; flex:1; }
+.sni-results { display:flex; flex-direction:column; margin-top:20px; }
+.sni-result { display:grid; grid-template-columns:minmax(0,1fr) 90px auto; gap:16px; padding:15px 0; border-bottom:1px solid var(--border); align-items:center; }
+.sni-result strong { display:block; overflow-wrap:anywhere; font-size:13px; }
+.sni-result small { display:block; color:var(--text-muted); font-size:11px; margin-top:6px; overflow-wrap:anywhere; }
+.sni-latency { color:var(--blue-bright); font-variant-numeric:tabular-nums; font-size:13px; }
+.sni-dialog-foot { border-top:1px solid var(--border); }
+@media(max-width:1100px) { .host-overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px) { .host-overview-grid { grid-template-columns:1fr; } .sni-field { flex-direction:column; align-items:stretch; } .sni-result { gap:8px; grid-template-columns:minmax(0,1fr) 66px auto; } .sni-dialog-head,.sni-dialog-body,.sni-dialog-foot { padding:16px; } }
 </style>
 </head>
 <body>
@@ -1479,7 +1517,7 @@ SOFTWARE.
       <input id="user" autocomplete="username" placeholder="输入用户名" required>
       <label for="pass">登录密码</label>
       <input id="pass" type="password" autocomplete="current-password" placeholder="输入密码" required>
-      <button class="btn primary full" type="submit">登录控制台 →</button>
+      <button class="btn primary full" type="submit">登录控制台 <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"/></svg></button>
       <div id="loginError" class="error"></div>
     </div>
   </form>
@@ -1527,7 +1565,7 @@ SOFTWARE.
         <p id="subtitle">综合订阅配置状态</p>
       </div>
       <div class="actions">
-        <button id="manageProfiles" class="btn current-profile" title="进入订阅管理并切换配置"><span>当前订阅</span><strong id="currentProfileName">—</strong><span>切换 ↗</span></button>
+        <button id="manageProfiles" class="btn current-profile" title="进入订阅管理并切换配置"><span>当前订阅</span><strong id="currentProfileName">—</strong><span>切换 <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"/></svg></span></button>
         <button id="refresh" class="btn"><svg class="icon" aria-hidden="true"><use href="#icon-refresh-cw"/></svg>刷新</button>
         <button id="importNode" class="btn hidden"><svg class="icon" aria-hidden="true"><use href="#icon-link"/></svg>批量链接导入</button>
         <button id="add" class="btn primary hidden"><svg class="icon" aria-hidden="true"><use href="#icon-circle-plus"/></svg>新增</button>
@@ -1580,7 +1618,7 @@ const S = {
 
 function notice(text) {
   const t = $('toast');
-  t.textContent = text;
+  t.innerHTML = uiIcon('check') + esc(text);
   t.classList.remove('hidden');
   clearTimeout(window._noticeTimer);
   window._noticeTimer = setTimeout(() => t.classList.add('hidden'), 2400);
@@ -1589,6 +1627,7 @@ function notice(text) {
 function showLogin() {
   stopMonitoring();
   S.monitorHistory = new Map(); S.monitorData = null; S.monitorId = '';
+  S.monitorCards = new Map(); closeSniScanner();
   sessionStorage.removeItem('mxioc_token');
   localStorage.removeItem('mxioc_token');
   S.token = null;
@@ -1685,7 +1724,7 @@ function updatePanel(status) {
       </div>
       ${status.checkError ? `<div class="error">${esc(status.checkError)}</div>` : ''}
       <div class="toolbar" style="margin-top:16px;">
-        <button class="btn" onclick="manualUpdateCheck()">⟳ 立即检查</button>
+        <button class="btn" onclick="manualUpdateCheck()">${uiIcon('refresh-cw')}立即检查</button>
         ${status.available ? '<button class="btn primary" onclick="confirmSoftwareUpdate(false)">⬆ 立即升级</button><button class="btn" onclick="dismissSoftwareUpdate()">暂不更新</button>' : '<button class="btn" onclick="confirmSoftwareUpdate(true)">↻ 重新安装当前版本</button>'}
       </div>
       <div class="note">系统每 24 小时自动检查一次 GitHub 仓库。只有点击“立即更新”才会安装；更新程序不会修改现有订阅、节点、规则、域名或证书。</div>
@@ -1843,14 +1882,15 @@ function draw() {
 }
 
 function tableSlice(rows, key) {
-  const pages = Math.max(1, Math.ceil(rows.length / 50));
+  const size = key === 'monitoring' ? 18 : 50;
+  const pages = Math.max(1, Math.ceil(rows.length / size));
   const page = Math.min(pages, Math.max(1, S.tablePages[key] || 1));
   S.tablePages[key] = page;
-  return { rows: rows.slice((page - 1) * 50, page * 50), count: rows.length, page, pages, key };
+  return { rows: rows.slice((page - 1) * size, page * size), count: rows.length, page, pages, key, size };
 }
 
 function pagination(p) {
-  return `<div class="pagination"><span>共 ${p.count} 项 · 每页 50 项</span><div class="toolbar">
+  return `<div class="pagination"><span>共 ${p.count} 项 · 每页 ${p.size || 50} 项</span><div class="toolbar">
     <button class="btn small" onclick="turnTablePage('${p.key}',-1)" ${p.page === 1 ? 'disabled' : ''}>上一页</button>
     <span>${p.page} / ${p.pages}</span>
     <button class="btn small" onclick="turnTablePage('${p.key}',1)" ${p.page === p.pages ? 'disabled' : ''}>下一页</button>
@@ -1928,7 +1968,7 @@ function profiles() {
   const page = tableSlice(rows, 'profiles');
   const current = S.profiles.find(p => p.id === S.profile);
   $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>我的订阅</h3><p class="muted">共 ${S.profiles.length} 份订阅 · 当前：${esc(current?.name || '未选择')}</p></div>
-    <button class="btn primary" onclick="profileCreate()">＋ 新建订阅</button></div>
+    <button class="btn primary" onclick="profileCreate()">${uiIcon('circle-plus')}新建订阅</button></div>
     <div class="toolbar profiles-toolbar"><input id="search" aria-label="搜索订阅" placeholder="搜索订阅名称或标识…" value="${esc(q)}">
       <select id="profileFilter" aria-label="筛选订阅"><option value="all">全部订阅</option><option value="current">当前订阅</option><option value="configured">已设置流量</option><option value="expired">已到期</option></select>
       <select id="profileSort" aria-label="订阅排序"><option value="default">默认顺序</option><option value="latest">最近创建优先</option><option value="name">名称排序</option></select></div>
@@ -2011,14 +2051,14 @@ async function servers() {
 function renderServers() {
   const q = S.filters.servers || '';
   const page = tableSlice(S.servers.filter(s => `${s.name} ${s.host} ${s.domain}`.toLowerCase().includes(q.toLowerCase())), 'servers');
-  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>远端服务器</h3><p class="muted">可选择 3x-ui 面板、独立 Xray 或 sing-box，也可接入现有 X-ui。SSH 账号须为 root 或具有 sudo 权限。</p></div><div class="toolbar"><button class="btn" onclick="serverForm('',true)">接入已有面板 / 内核</button><button class="btn primary" onclick="serverForm()">＋ 添加服务器</button></div></div>
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>远端服务器</h3><p class="muted">可选择 3x-ui 面板、独立 Xray 或 sing-box，也可接入现有 X-ui。SSH 账号须为 root 或具有 sudo 权限。</p></div><div class="toolbar"><button class="btn" onclick="serverForm('',true)">接入已有面板 / 内核</button><button class="btn primary" onclick="serverForm()">${uiIcon('circle-plus')}添加服务器</button></div></div>
     <div class="toolbar profiles-toolbar"><input id="search" aria-label="搜索服务器" placeholder="搜索名称、IP 或域名…" value="${esc(q)}"></div>
     <div class="profile-grid">${page.rows.map(s => {
       const id = encodeURIComponent(s.id), url = panelLink(s.panelUrl), running = s.job?.status === 'running';
       return `<article class="profile-card"><div class="profile-card-head"><div><h4>${esc(s.name)}</h4><div class="profile-id">${esc(s.sshUser)}@${esc(s.host)}:${s.sshPort}</div></div><span class="pill ${s.job?.status === 'failed' ? 'reject' : ''}">${s.connectionMode === 'existing' ? (s.existingVerifiedAt ? '已接入' : '待验证') : remoteStatus(s.job?.status)}</span></div>
       <div class="profile-usage">${s.connectionMode === 'existing' ? (panelType(s.installType) ? '接入现有面板' : '接入已有内核') : s.domain ? '绑定域名：' + esc(s.domain) : '无域名自动安装'}<br>安装类型：${esc(s.installType || '3x-ui')}${panelType(s.installType) ? ' · 面板账号：' + esc(s.panelUser) : ' · 支持模板节点 / 中转'}${s.job ? '<br>阶段：' + esc(remoteStage(s.job.stage)) : ''}</div>
       ${s.lastError ? `<div class="error">${esc(s.lastError)}</div>` : ''}
-      ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开面板 ↗</a><code style="overflow-wrap:anywhere;white-space:normal">${esc(url)}</code>` : ''}
+      ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开面板 ${uiIcon('chevron-right')}</a><code style="overflow-wrap:anywhere;white-space:normal">${esc(url)}</code>` : ''}
       <div class="toolbar"><button class="btn small primary" onclick="openRemoteNodes('${id}')" ${running ? 'disabled' : ''}>节点 / 中转</button><button class="btn small" onclick="serverForm('${id}')" ${running ? 'disabled' : ''}>连接设置</button><button class="btn small" onclick="openHostMonitor('${id}')">硬件监控</button><button class="btn small" onclick="serverTest('${id}',this)">测试 SSH</button></div>
       <div class="toolbar profile-actions">${s.connectionMode === 'existing' ? `<button class="btn small" onclick="serverAttach('${id}',this)">${panelType(s.installType) ? '验证现有面板' : '验证已有内核'}</button>` : `<button class="btn small" onclick="serverInstall('${id}')" ${running ? 'disabled' : ''}>${s.job?.status === 'failed' || s.job?.status === 'interrupted' ? '重新安装 / 重试' : '安装 / 更新'}</button>`}
       ${s.job ? `<button class="btn small" onclick="showServerJob('${encodeURIComponent(s.job.id)}')">安装日志</button>` : ''}
@@ -2219,7 +2259,7 @@ function sharedRemoteInbound(row) {
 function renderRemoteNodes() {
   const q = S.filters.remoteNodes || '', s = S.remoteServer;
   const page = tableSlice(S.remoteRows.filter(x => `${x.remark} ${x.protocol} ${x.port}`.toLowerCase().includes(q.toLowerCase())), 'serverNodes');
-  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>${esc(s.name)} · ${esc(s.host)}</h3><p class="muted">${esc(s.installType || '3x-ui')} · 新建入站自动归属当前订阅。独立内核仅展示总控创建的入站。</p></div><div class="toolbar"><button class="btn" onclick="go('nodes')">返回总控节点</button><button class="btn" onclick="chooseNodeServer()">切换服务器</button><button class="btn" onclick="go('traffic')">流量与有效期</button><button class="btn primary" onclick="remoteNodeForm(false)">＋ 添加节点</button><button class="btn primary" onclick="remoteNodeForm(true)">＋ 添加中转</button></div></div>
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>${esc(s.name)} · ${esc(s.host)}</h3><p class="muted">${esc(s.installType || '3x-ui')} · 新建入站自动归属当前订阅。独立内核仅展示总控创建的入站。</p></div><div class="toolbar"><button class="btn" onclick="go('nodes')">返回总控节点</button><button class="btn" onclick="chooseNodeServer()">切换服务器</button><button class="btn" onclick="go('traffic')">流量与有效期</button><button class="btn primary" onclick="remoteNodeForm(false)">${uiIcon('circle-plus')}添加节点</button><button class="btn primary" onclick="remoteNodeForm(true)">${uiIcon('circle-plus')}添加中转</button></div></div>
     <div class="toolbar"><input id="search" aria-label="搜索远端节点" placeholder="搜索节点名称、协议、端口…" value="${esc(q)}"></div>
     <div class="tablewrap"><table><thead><tr><th>ID</th><th>名称</th><th>协议 / 端口</th><th>状态</th><th>上传 / 下载</th><th>订阅联动</th><th>操作</th></tr></thead><tbody>
     ${page.rows.map(x => `<tr><td>${x.id}</td><td>${esc(x.remark)}</td><td><code>${esc(x.protocol)} : ${x.port}</code></td><td>${x.enable ? '启用' : '停用'}</td><td>${formatBytes(x.up || 0)} / ${formatBytes(x.down || 0)}</td><td>${(S.data?.profile?.traffic?.bindings || []).some(b=>b.serverId===S.serverId && b.inboundId===x.id && b.status==='active') ? '<span class="pill">已绑定当前订阅</span>' : '<span class="muted">未绑定当前订阅</span>'}</td><td>
@@ -2233,17 +2273,25 @@ function remoteNodeForm(relay) {
     <div><label for="rnName">节点名称</label><input id="rnName" required maxlength="100" placeholder="例如 香港中转"></div>
     <div><label for="rnPort">监听端口</label><input id="rnPort" type="number" min="1" max="65535" required value="443"></div>
     ${relay ? '' : '<div class="span2"><label for="rnTemplate">节点模板</label><select id="rnTemplate"><option value="vless-reality">VLESS + Reality / Vision（免证书）</option><option value="vmess-tcp">VMess + TCP</option><option value="shadowsocks">Shadowsocks AES-128-GCM</option><option value="trojan-tls">Trojan + TLS（需远端证书）</option><option value="vless-ws-tls">VLESS + WebSocket + TLS（需远端证书）</option></select><p class="hint">模板按所选服务器内核提供。新建入站自动绑定当前订阅；流量倍率、有效期和节点限速可在“流量与有效期”管理。</p></div>'}
-    <div class="span2"><label for="rnSni">Reality 伪装域名</label><input id="rnSni" value="www.microsoft.com" required><p class="hint">仅用于 Reality 模板，应填写该服务器可访问、支持 TLS 的域名。</p></div>
+    <div class="span2" id="rnSniFields"><label for="rnSni">Reality / TLS 域名</label><div class="sni-field"><input id="rnSni" value="www.microsoft.com" required><button id="rnSniTest" type="button" class="btn">${uiIcon('gauge')}扫描并选择 SNI</button></div><p class="hint">Reality 可扫描选择；证书模板必须使用与远端证书匹配的域名。</p></div>
     ${relay ? '' : '<div id="rnTlsFields" class="span2 hidden"><div class="grid"><div><label for="rnCert">远端证书绝对路径</label><input id="rnCert" placeholder="/etc/ssl/certs/server.pem"></div><div><label for="rnKey">远端私钥绝对路径</label><input id="rnKey" placeholder="/etc/ssl/private/server.key"></div><div><label for="rnPath">WebSocket 路径</label><input id="rnPath" value="/vpn"></div></div><p class="hint">总控不回传证书私钥；证书必须已存在于远端并允许内核服务账号读取。</p></div>'}
-    <div class="span2"><label for="rnSniList">候选 SNI（每行一个，最多 20 个）</label><textarea id="rnSniList">${esc(sniCandidates().join('\n'))}</textarea><button id="rnSniTest" type="button" class="btn">从目标服务器测试 TLS 1.3 延迟</button><div id="rnSniResults"></div></div>
     ${relay ? '<div class="span2"><label for="rnLanding">落地节点分享链接</label><textarea id="rnLanding" required placeholder="vless://、vmess://、trojan://、ss://、socks5:// 或 http://"></textarea><div class="note">将创建 Reality 入口、落地出站和最高优先级路由。失败时尝试撤回本次创建，并保留配置备份。</div></div>' : ''}
   </div><label class="inlinecheck"><input id="rnImport" type="checkbox" checked>创建后导入当前订阅</label><div id="remoteError" class="error" role="alert"></div><button id="rnSave" class="btn primary">创建${relay ? '中转' : '节点'}</button></form>`);
   if ($('rnTemplate') && S.remoteServer?.installType === 'sing-box') {
     $('rnTemplate').add(new Option('Hysteria2 + TLS（需远端证书）', 'hysteria2'));
     $('rnTemplate').add(new Option('TUIC + TLS（需远端证书）', 'tuic'));
   }
-  if ($('rnTemplate')) $('rnTemplate').onchange = () => $('rnTlsFields').classList.toggle('hidden', !['trojan-tls', 'vless-ws-tls', 'hysteria2', 'tuic'].includes(val('rnTemplate')));
-  $('rnSniTest').onclick = () => testSniCandidates(S.serverId, 'rnSni', 'rnSniList', 'rnSniResults', $('rnSniTest'));
+  if ($('rnTemplate')) {
+    $('rnTemplate').onchange = () => {
+      const tls = ['trojan-tls','vless-ws-tls','hysteria2','tuic'].includes(val('rnTemplate'));
+      $('rnTlsFields').classList.toggle('hidden', !tls);
+      $('rnSniFields').classList.toggle('hidden', !tls && val('rnTemplate') !== 'vless-reality');
+      $('rnSni').required=tls || val('rnTemplate')==='vless-reality';
+      $('rnSniTest').classList.toggle('hidden',tls);
+    };
+    $('rnTemplate').onchange();
+  }
+  $('rnSniTest').onclick = () => openSniScanner(S.serverId, 'rnSni');
   $('remoteNodeForm').onsubmit = async e => {
     e.preventDefault(); const serverId = S.serverId, profile = S.profile, autoImport = $('rnImport').checked;
     let created = false;
@@ -2263,33 +2311,69 @@ function remoteNodeForm(relay) {
 }
 
 function sniCandidates() {
-  const values = ['www.microsoft.com', 'www.apple.com', 'www.cloudflare.com', 'www.amazon.com'];
+  const values = ['www.microsoft.com','www.apple.com','www.cloudflare.com','www.amazon.com',
+    'www.bing.com','www.microsoftonline.com','login.microsoftonline.com','learn.microsoft.com','azure.microsoft.com','www.office.com','www.xbox.com','www.live.com',
+    'www.icloud.com','developer.apple.com','support.apple.com','apps.apple.com','music.apple.com','www.cdn-apple.com',
+    'www.google.com','www.gstatic.com','fonts.googleapis.com','www.youtube.com','www.android.com','developer.android.com',
+    'aws.amazon.com','www.amazon.co.jp','www.amazon.co.uk','www.twitch.tv',
+    'www.github.com','github.com','api.github.com','raw.githubusercontent.com','github.blog','www.gitlab.com',
+    'www.mozilla.org','www.firefox.com','www.wikipedia.org','www.wikimedia.org','www.python.org','www.rust-lang.org','www.kernel.org',
+    'www.docker.com','hub.docker.com','www.npmjs.com','nodejs.org','www.debian.org','ubuntu.com',
+    'www.adobe.com','www.autodesk.com','www.nvidia.com','www.amd.com','www.intel.com','www.samsung.com','www.sony.com',
+    'www.digitalocean.com','www.linode.com','www.hetzner.com','www.ovhcloud.com','www.fastly.com','www.akamai.com','www.oracle.com',
+    'www.speedtest.net','www.dropbox.com','www.spotify.com','www.paypal.com','www.salesforce.com','www.shopify.com','www.zoom.com','www.slack.com'];
   (S.data?.nodes || []).forEach(n => {
     const cfg = n.config || {};
     if (cfg.servername || cfg.sni) values.push(cfg.servername || cfg.sni);
   });
-  return [...new Set(values)];
+  return [...new Set(values.map(x=>String(x).trim().toLowerCase()).filter(Boolean))].slice(0,200);
 }
 
-async function testSniCandidates(serverId, targetId, candidatesId, resultsId, button) {
-  const output = $(resultsId);
-  button.disabled = true; output.textContent = '正在从目标服务器执行 DNS 和 TLS 1.3 握手测试…';
-  try {
-    const candidates = [...new Set($(candidatesId).value.split(/\s+/).filter(Boolean))];
-    if (!candidates.length) throw Error('请填写候选 SNI 域名');
-    const data = {results: []};
-    for (let index = 0; index < candidates.length; index += 20) {
-      const batch = await api('/servers/sni', jsonOpt('POST', {serverId, candidates: candidates.slice(index, index + 20)}));
-      data.results.push(...batch.results);
-      if ($(resultsId) !== output) return;
-      output.textContent = `已测试 ${data.results.length} / ${candidates.length} 个候选域名…`;
-    }
-    data.results.sort((a,b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity));
-    if ($(resultsId) !== output) return;
-    output.innerHTML = data.results.map(r => `<div class="toolbar"><code>${esc(r.domain)}</code><span>${r.ok ? esc(r.latencyMs) + ' ms · ' + esc(r.tls) + ' · ' + esc(r.alpn || '无 ALPN') : esc(r.error)}</span>${r.ok ? `<button type="button" class="btn small" data-domain="${esc(r.domain)}">使用此 SNI</button>` : ''}</div>`).join('') + '<p class="hint">延迟包含 DNS、TCP 和 TLS 握手；结果不保证 Reality 在所有网络环境下可用。</p>';
-    output.querySelectorAll('[data-domain]').forEach(b => b.onclick = () => { if ($(targetId)) $(targetId).value = b.dataset.domain; });
-  } catch (error) { if ($(resultsId) === output) output.textContent = error.message; }
-  finally { if (button.isConnected) button.disabled = false; }
+function closeSniScanner() {
+  const view=S.sniScan;
+  if(!view) return;
+  view.controller.abort(); view.dialog.close(); view.dialog.remove(); S.sniScan=null;
+  if(view.focus?.isConnected) view.focus.focus();
+}
+
+function openSniScanner(serverId,targetId) {
+  closeSniScanner();
+  const target=$(targetId); if(!target) return;
+  const dialog=document.createElement('dialog'); dialog.id='sniScanner'; dialog.className='sni-dialog';
+  const view={dialog,target,focus:document.activeElement,controller:new AbortController(),results:[],running:false};
+  S.sniScan=view;
+  dialog.innerHTML=`<div class="sni-dialog-head"><div><h3>${uiIcon('gauge')}SNI 延迟扫描</h3><p class="hint">目标服务器发起 DNS、TCP 与 TLS 1.3 握手；成功不等同于完整 Reality 连通验证。</p></div><button type="button" class="btn" id="sniClose" aria-label="关闭 SNI 扫描">${uiIcon('x')}</button></div><div class="sni-dialog-body"><details><summary>自定义扫描列表 · 内置 ${sniCandidates().length} 个候选</summary><label for="sniScanList">每行一个域名，最多 200 个</label><textarea id="sniScanList" rows="5">${esc(sniCandidates().join('\n'))}</textarea></details><div class="panel-head"><span id="sniProgress" role="status" aria-live="polite">准备扫描</span><button class="btn" type="button" id="sniRescan">${uiIcon('refresh-cw')}重新扫描</button></div><progress id="sniScanProgress" max="100" value="0" aria-label="扫描进度"></progress><div class="sni-results" id="sniScanResults"></div></div><div class="sni-dialog-foot"><span class="hint">按延迟排序，仅成功结果可选。关闭窗口即停止后续批次。</span><button class="btn" type="button" id="sniCancel">取消</button></div>`;
+  document.body.append(dialog); dialog.showModal();
+  dialog.addEventListener('cancel',event=>{event.preventDefault();closeSniScanner();});
+  $('sniClose').onclick=$('sniCancel').onclick=closeSniScanner;
+  const valid=()=>S.sniScan===view && target.isConnected && dialog.open;
+  const render=()=>{
+    const sorted=[...view.results].sort((a,b)=>Number(b.ok)-Number(a.ok)||(a.latencyMs??Infinity)-(b.latencyMs??Infinity));
+    $('sniScanResults').innerHTML=sorted.map(r=>`<div class="sni-result"><div><strong>${esc(r.domain)}</strong><small>${r.ok?esc(r.tls)+' · '+esc(r.alpn || '无 ALPN'):esc(r.error || '不可用')}</small></div><span class="${r.ok?'sni-latency':'hint'}">${r.ok?esc(r.latencyMs)+' ms':'失败'}</span><button type="button" class="btn small" data-sni-domain="${esc(r.domain)}" ${r.ok?'':'disabled'}>选择</button></div>`).join('');
+    dialog.querySelectorAll('[data-sni-domain]').forEach(button=>button.onclick=()=>{
+      if(valid()) {target.value=button.dataset.sniDomain;target.dispatchEvent(new Event('input',{bubbles:true}));closeSniScanner();}
+    });
+  };
+  const scan=async()=>{
+    if(view.running || !valid()) return;
+    const candidates=[...new Set($('sniScanList').value.split(/\s+/).filter(Boolean))];
+    if(!candidates.length || candidates.length>200) { $('sniProgress').textContent='请填写 1–200 个候选域名'; return; }
+    view.running=true;view.results=[];view.errors=[];render();$('sniRescan').disabled=true;
+    const queue=[];for(let i=0;i<candidates.length;i+=20)queue.push(candidates.slice(i,i+20));
+    let completed=0;
+    const progress=()=>{$('sniProgress').textContent=`已测试 ${completed} / ${candidates.length} · 可用 ${view.results.filter(r=>r.ok).length}${view.errors.length?' · '+view.errors.join('；'):''}`;$('sniScanProgress').value=completed/candidates.length*100;};
+    progress();
+    await Promise.all(Array.from({length:Math.min(2,queue.length)},async()=>{
+      while(queue.length && valid()) {
+        const batch=queue.shift();
+        try {const data=await api('/servers/sni',{...jsonOpt('POST',{serverId,candidates:batch}),signal:view.controller.signal});if(!valid())return;view.results.push(...data.results);}
+        catch(error){if(!valid())return;view.errors.push(error.message);}
+        completed+=batch.length;if(valid()){progress();render();}
+      }
+    }));
+    view.running=false;if(valid())$('sniRescan').disabled=false;
+  };
+  $('sniRescan').onclick=scan;void scan();
 }
 
 async function bindRemoteNode(id) {
@@ -2329,16 +2413,64 @@ async function monitoring() {
     $('content').innerHTML = '<section class="panel"><h3>先添加一台服务器</h3><p class="muted">监控通过已核对主机指纹的 SSH 连接采样，不需要额外监听端口或安装常驻代理。</p><button class="btn primary" onclick="go(\'servers\')">前往服务器管理</button></section>';
     return;
   }
-  if (!S.servers.some(s => s.id === S.monitorId)) S.monitorId = S.servers[0].id;
+  if (!S.servers.some(s => s.id === S.monitorId)) S.monitorId = '';
+  if (!S.monitorId) return renderMonitorOverview();
   const server = S.servers.find(s => s.id === S.monitorId);
-  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>服务器资源</h3><p class="muted">只读采样 · 5 秒刷新 · 后台标签页暂停采集</p></div><div class="toolbar"><select id="monitorHost" aria-label="选择监控服务器">${S.servers.map(s => `<option value="${esc(s.id)}" ${s.id === S.monitorId ? 'selected' : ''}>${esc(s.name)} · ${esc(s.host)}</option>`).join('')}</select><button type="button" id="monitorRefresh" class="btn">${uiIcon('refresh-cw')}刷新</button></div></div><div class="toolbar"><span id="monitorStatus" class="pill" role="status">正在读取 ${esc(server.host)}…</span><span id="monitorTimestamp" class="hint"></span></div><div id="monitorError" class="error" role="alert"></div></section><div id="monitorBody"><div class="empty" role="status">首次采样中，CPU 与网速将在第二次采样后显示。</div></div>`;
-  $('monitorHost').onchange = () => { S.monitorId = $('monitorHost').value; void monitoring().catch(error => notice(error.message)); };
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><button class="btn small" onclick="S.monitorId='';void monitoring()">${uiIcon('chevron-right')}全部服务器</button><h3 class="host-detail-title">${esc(server.name)}</h3><p class="muted">${esc(server.host)} · ${esc(server.installType || '3x-ui')} · 5 秒采样</p></div><div class="toolbar"><button type="button" id="monitorRefresh" class="btn">${uiIcon('refresh-cw')}刷新</button></div></div><div class="toolbar"><span id="monitorStatus" class="pill" role="status">正在读取 ${esc(server.host)}…</span><span id="monitorTimestamp" class="hint"></span></div><div id="monitorError" class="error" role="alert"></div></section><div id="monitorBody"><div class="empty" role="status">首次采样中，CPU 与网速将在第二次采样后显示。</div></div>`;
   $('monitorRefresh').onclick = () => refreshHostMetrics(generation);
   await refreshHostMetrics(generation);
 }
 
+function renderMonitorOverview() {
+  stopMonitoring();
+  const generation = S.monitorGeneration;
+  S.monitorCards ||= new Map();
+  const query = (S.filters.monitoring || '').toLowerCase();
+  const page = tableSlice(S.servers.filter(s => `${s.name} ${s.host} ${s.installType || ''}`.toLowerCase().includes(query)), 'monitoring');
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>服务器资源概览</h3><p class="muted">${S.servers.length} 台服务器 · 点击卡片查看详情 · 仅采集当前页，最多 3 个并发</p></div><button class="btn" id="monitorOverviewRefresh">${uiIcon('refresh-cw')}刷新当前页</button></div><input id="search" type="search" aria-label="搜索监控服务器" placeholder="搜索名称、IP 或内核…" value="${esc(S.filters.monitoring || '')}"></section><div class="host-overview-grid">${page.rows.map(s=>`<button type="button" class="host-card" data-host="${esc(s.id)}" aria-label="查看 ${esc(s.name)} 的监控详情"><span class="host-card-heading">${uiIcon('server')}<strong>${esc(s.name)}</strong>${uiIcon('chevron-right')}</span><span class="host-address">${esc(s.host)} · ${esc(s.installType || '3x-ui')}</span><span class="host-summary" data-summary>等待采样</span></button>`).join('') || '<p class="empty">没有匹配的服务器</p>'}</div>${pagination(page)}`;
+  const cards = new Map([...document.querySelectorAll('[data-host]')].map(el=>[el.dataset.host, el]));
+  cards.forEach((el,id)=>{ el.onclick=()=>openHostMonitor(encodeURIComponent(id)); renderMonitorCard(el,S.monitorCards.get(id)); });
+  bindSearch('monitoring', renderMonitorOverview);
+  const valid = () => generation === S.monitorGeneration && S.page === 'monitoring' && !S.monitorId && !document.hidden;
+  let busy = false;
+  const refresh = async () => {
+    if (!valid() || busy) return;
+    busy = true; clearTimeout(S.monitorTimer);
+    const button = $('monitorOverviewRefresh'); button.disabled=true;
+    const queue = [...page.rows];
+    const controller = new AbortController(); S.monitorAbort=controller;
+    await Promise.all(Array.from({length:Math.min(3,queue.length)},async()=>{
+      while(queue.length && valid()) {
+        const s=queue.shift();
+        try {
+          const data=await api('/servers/metrics?id='+encodeURIComponent(s.id),{signal:controller.signal});
+          if (!valid()) break;
+          S.monitorCards.set(s.id,data); renderMonitorCard(cards.get(s.id),data);
+        } catch(error) {
+          if (!valid() || error.name==='AbortError') break;
+          const stale={...S.monitorCards.get(s.id),stale:true,error:error.message};
+          S.monitorCards.set(s.id,stale);renderMonitorCard(cards.get(s.id),stale);
+        }
+      }
+    }));
+    busy=false; if(S.monitorAbort===controller) S.monitorAbort=null;
+    if(button.isConnected) button.disabled=false;
+    if(valid()) S.monitorTimer=setTimeout(refresh,30000);
+    while(S.monitorCards.size>500) S.monitorCards.delete(S.monitorCards.keys().next().value);
+  };
+  $('monitorOverviewRefresh').onclick=refresh;
+  void refresh();
+}
+
+function renderMonitorCard(card,data) {
+  if(!card || !data) return;
+  const pct=x=>x==null?'等待采样':Number(x).toFixed(1)+'%';
+  const disk=data.disks?.find(d=>d.mount==='/') || data.disks?.[0];
+  card.querySelector('[data-summary]').innerHTML=`<span class="host-state ${data.stale?'reject':''}">${data.stale?'采样失败 / 历史数据':data.warmingUp?'已连接 · 预热中':'采样成功'}</span><span class="host-mini-metrics"><span>${uiIcon('cpu')}CPU<strong>${pct(data.cpuPercent)}</strong></span><span>${uiIcon('memory-stick')}内存<strong>${pct(data.memory?.percent)}</strong></span><span>${uiIcon('hard-drive')}磁盘<strong>${pct(disk?.percent)}</strong></span></span><span class="host-address">${data.error?esc(data.error):data.sampledAt?'采样于 '+esc(new Date(data.sampledAt*1000).toLocaleTimeString())+' · 点击查看详情':'等待下一次采样'}</span>`;
+}
+
 async function refreshHostMetrics(generation = S.monitorGeneration) {
-  if (S.page !== 'monitoring' || generation !== S.monitorGeneration || document.hidden || S.monitorAbort) return;
+  if (S.page !== 'monitoring' || !S.monitorId || generation !== S.monitorGeneration || document.hidden || S.monitorAbort) return;
   clearTimeout(S.monitorTimer);
   const controller = new AbortController();
   S.monitorAbort = controller;
@@ -2395,7 +2527,7 @@ function renderHostMetrics(data) {
     ${metric('arrow-up-from-line','出站网速',rate(net?.txBytesPerSecond),'累计发送 ' + (net?.txBytes == null ? '—' : formatBytes(net.txBytes)))}
     ${metric('activity','持续运行',days + ' 天 ' + hours + ' 小时',data.warmingUp ? '网速与 CPU 需要两次采样计算' : '网卡累计流量自开机 / 计数器重置起计算')}
     </div><section class="panel"><div class="panel-head"><h3>网络吞吐趋势</h3><select id="monitorNic" aria-label="选择监控网卡">${choices.map(n=>`<option value="${esc(n.name)}" ${n.name===S.monitorNic?'selected':''}>${esc(n.label)}</option>`).join('')}</select></div>
-    <div class="toolbar"><span class="monitor-rx">入站 ↓ ${rate(net?.rxBytesPerSecond)}</span><span class="monitor-tx">出站 ↑ ${rate(net?.txBytesPerSecond)}</span><span class="hint">纵轴上限 ${rate(max)} · 最近 ${history.length} 次有效采样</span></div>
+    <div class="toolbar"><span class="monitor-rx">${uiIcon('arrow-down-to-line')}入站 ${rate(net?.rxBytesPerSecond)}</span><span class="monitor-tx">${uiIcon('arrow-up-from-line')}出站 ${rate(net?.txBytesPerSecond)}</span><span class="hint">纵轴上限 ${rate(max)} · 最近 ${history.length} 次有效采样</span></div>
     <svg class="monitor-chart" viewBox="0 0 600 150" preserveAspectRatio="none" role="img" aria-label="最近有效采样的入站与出站网速趋势"><path class="chart-grid" d="M0 10H600 M0 75H600 M0 140H600"/><polyline class="rx-line" points="${points('rx')}"/><polyline class="tx-line" points="${points('tx')}"/></svg><div class="chart-axis"><span>${history.length ? esc(new Date(history[0].time * 1000).toLocaleTimeString()) : '等待有效采样'}</span><span>${history.length ? esc(new Date(history.at(-1).time * 1000).toLocaleTimeString()) : ''}</span></div><p class="hint">默认仅汇总默认路由网卡（${esc(data.summaryInterfaces.join(', ') || '未识别')}），避免重复叠加虚拟网卡。服务器网卡流量与订阅计费流量分别统计。</p></section>
     <div class="monitor-details"><section class="panel"><h3>主机与 IP 地址</h3><dl class="monitor-definition"><dt>SSH 目标 IP</dt><dd><code>${esc(data.managementIp)}</code></dd><dt>主机名</dt><dd>${esc(data.hostname)}</dd><dt>系统</dt><dd>${esc(data.os)} · ${esc(data.kernel)}</dd><dt>CPU</dt><dd>${esc(data.cpuModel)}</dd><dt>Swap</dt><dd>${formatBytes(data.memory.swapUsed)} / ${formatBytes(data.memory.swapTotal)}</dd><dt>网卡地址</dt><dd>${data.addresses.map(a=>`${esc(a.interface)} · <code>${esc(a.address)}</code>`).join('<br>') || '未读到地址（请确认远端已安装 iproute2）'}</dd></dl><p class="hint">网卡地址由服务器本机提供，不把内网地址推断为公网 IP；NAT 公网映射以 SSH 目标信息为准。</p></section>
     <section class="panel"><h3>每核 CPU</h3><div class="core-grid">${data.perCpu.slice(0,256).map(c=>`<div class="core-item">${esc(c.name)}<br><strong>${number(c.percent)}</strong></div>`).join('')}</div></section></div>
@@ -2405,7 +2537,7 @@ function renderHostMetrics(data) {
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { clearTimeout(S.monitorTimer); S.monitorAbort?.abort(); }
-  else if (S.page === 'monitoring') void refreshHostMetrics();
+  else if (S.page === 'monitoring') { if(S.monitorId) void refreshHostMetrics(); else renderMonitorOverview(); }
 });
 
 
@@ -2694,7 +2826,7 @@ function nodes() {
       <button type="button" class="btn small" onclick="go('traffic')">订阅流量与有效期</button>
       <button type="button" class="btn small" onclick="selectAllNodes()">全选全部</button>
       <button type="button" class="btn small" onclick="clearNodeSelection()">取消选择</button>
-      <button type="button" class="btn small primary" onclick="autoAddCountryFlags()">🌐 自动添加国旗</button>
+      <button type="button" class="btn small primary" onclick="autoAddCountryFlags()">${uiIcon('globe')}自动添加国旗</button>
       <button id="bulkDeleteButton" type="button" class="btn small danger" onclick="bulkDeleteNodes()">批量删除</button>
       <span id="nodeSelectedCount" class="pill">已选择 0 个</span>
     </div>
@@ -2722,8 +2854,8 @@ function nodes() {
               <td>${esc(x.server)}</td>
               <td>${esc(x.port)}</td>
               <td>
-                <button class="btn small" onclick="moveNode(${x.index},-1)" ${x.index === 0 ? 'disabled' : ''} title="上移">↑</button>
-                <button class="btn small" onclick="moveNode(${x.index},1)" ${x.index === S.data.nodes.length - 1 ? 'disabled' : ''} title="下移">↓</button>
+                <button class="btn small" onclick="moveNode(${x.index},-1)" ${x.index === 0 ? 'disabled' : ''} title="上移" aria-label="上移">${uiIcon('arrow-up-from-line')}</button>
+                <button class="btn small" onclick="moveNode(${x.index},1)" ${x.index === S.data.nodes.length - 1 ? 'disabled' : ''} title="下移" aria-label="下移">${uiIcon('arrow-down-to-line')}</button>
                 <button class="btn small primary" onclick="shareNode(${x.index})" title="显示二维码并导出节点链接">二维码/导出</button>
                 <button class="btn small" onclick="nodeModal(${x.index})">编辑</button>
                 <button class="btn small danger" onclick="deleteNode(${x.index})">删除</button>
@@ -2856,7 +2988,7 @@ async function chains() {
                 <button class="btn small danger" onclick="deleteNode(${x.index})">删除</button>
               </td>
             </tr>`;
-          }).join('') || '<tr><td colspan="6" class="empty">暂未配置链式代理，点击右上角“[ ＋ 新增 ]”即可创建</td></tr>'}
+          }).join('') || '<tr><td colspan="6" class="empty">暂未配置链式代理，点击右上角“新增”即可创建</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -2949,7 +3081,7 @@ async function chainModal(index) {
         <div class="span2">
           <label for="chainMode">链式代理模式</label><select id="chainMode" ${x ? 'disabled' : ''}><option value="mihomo">Mihomo 客户端专用链式代理</option><option value="server">服务器内部转发（生成通用节点）</option></select>
           <label>链式代理名称</label>
-          <input id="chainName" required value="${esc(x?.name || '')}" placeholder="例如 美国 CN2 → 落地 VLESS 🇺🇸">
+          <input id="chainName" required value="${esc(x?.name || '')}" placeholder="例如 美国 CN2 → 落地 VLESS">
         </div>
         <div>
           <label>入口节点（中转）</label>
@@ -2963,14 +3095,14 @@ async function chainModal(index) {
         </div>
       </div>
     </fieldset>
-    <fieldset id="chainServerFields" class="section hidden"><legend>服务器入口</legend><div class="grid"><div><label for="chainPort">新入站端口</label><input id="chainPort" type="number" min="1" max="65535" value="24443"></div><div><label for="chainSni">Reality SNI</label><input id="chainSni" value="www.microsoft.com"></div></div><label for="chainSniList">候选 SNI</label><textarea id="chainSniList">${esc(sniCandidates().join('\n'))}</textarea><button id="chainSniTest" type="button" class="btn">从入口服务器测试 SNI</button><div id="chainSniResults"></div><p class="hint">新建 Reality 入站、出口出站及专属路由，不修改原入口节点。新入站自动绑定当前订阅，用于到期和流量撤销。</p></fieldset>
+    <fieldset id="chainServerFields" class="section hidden"><legend>服务器入口</legend><div class="grid"><div><label for="chainPort">新入站端口</label><input id="chainPort" type="number" min="1" max="65535" value="24443"></div><div><label for="chainSni">Reality SNI</label><input id="chainSni" value="www.microsoft.com"></div></div><button id="chainSniTest" type="button" class="btn">${uiIcon('gauge')}扫描并选择 SNI</button><p class="hint">新建 Reality 入站、出口出站及专属路由，不修改原入口节点。新入站自动绑定当前订阅，用于到期和流量撤销。</p></fieldset>
     <fieldset class="section">
       <legend>加入策略组</legend>
       <p class="hint">默认自动勾选非广告组，保存后该链式节点会自动添加至对应策略组中。</p>
       ${groupChecks(selected)}
     </fieldset>
     <div id="formError" class="error"></div>
-    <button class="btn primary" style="margin-top:16px;">💾 保存链式代理配置</button>
+    <button class="btn primary" style="margin-top:16px;">${uiIcon('file-code')}保存链式代理配置</button>
   </form>`);
 
   const entryServer = () => {
@@ -2981,7 +3113,7 @@ async function chainModal(index) {
   $('chainSniTest').onclick = () => {
     const ingress = entryServer();
     if (!ingress) return $('formError').textContent = '入口节点未添加到服务器，请选择 Mihomo 客户端专用链式代理模式';
-    void testSniCandidates(ingress.id, 'chainSni', 'chainSniList', 'chainSniResults', $('chainSniTest'));
+    openSniScanner(ingress.id, 'chainSni');
   };
   $('editForm').onsubmit = async e => {
     e.preventDefault();
@@ -3086,8 +3218,8 @@ function rules() {
               <td title="${esc(x.raw)}"><code>${esc(x.value || x.raw)}</code></td>
               <td><span class="pill ${x.action === 'DIRECT' ? 'direct' : x.action.startsWith('REJECT') ? 'reject' : ''}">${esc(optionLabel(x.action))}</span></td>
               <td>
-                <button class="btn small" onclick="moveRule(${x.index}, -1)" title="上移">↑</button>
-                <button class="btn small" onclick="moveRule(${x.index}, 1)" title="下移">↓</button>
+                <button class="btn small" onclick="moveRule(${x.index}, -1)" title="上移" aria-label="上移">${uiIcon('arrow-up-from-line')}</button>
+                <button class="btn small" onclick="moveRule(${x.index}, 1)" title="下移" aria-label="下移">${uiIcon('arrow-down-to-line')}</button>
                 <button class="btn small" onclick="ruleModal(${x.index})">编辑</button>
                 <button class="btn small danger" onclick="deleteRule(${x.index})">删除</button>
               </td>
@@ -3159,7 +3291,7 @@ async function subscriptions() {
         </div>
         <div>
           <label>预览解析</label>
-          <button id="previewSub" type="button" class="btn" style="margin-top:0;width:100%">⚡ 读取并预览订阅内容</button>
+          <button id="previewSub" type="button" class="btn" style="margin-top:0;width:100%">${uiIcon('activity')}读取并预览订阅内容</button>
         </div>
       </div>
       <fieldset class="section">
@@ -3226,7 +3358,7 @@ async function raw() {
   <section class="panel">
     <div class="panel-head">
       <h3>Clash / Mihomo 配置编辑器</h3>
-      <button id="saveRaw" class="btn primary">💾 校验并写回 YAML</button>
+      <button id="saveRaw" class="btn primary">${uiIcon('file-code')}校验并写回 YAML</button>
     </div>
     <div class="note">高级专家模式：保存时后台将执行严格的 YAML 解析校验，语法错误将自动拒绝并保留当前版本。</div>
     <label>SOURCE_CODE: /etc/sing-box/subscribe/clash-cn-route.yml</label>
@@ -3277,7 +3409,7 @@ async function system() {
         <input id="pwNew2" type="password" minlength="12" autocomplete="new-password">
       </div>
       <div class="span2" style="margin-top:14px;">
-        <button class="btn primary">💾 保存用户名与密码</button>
+        <button class="btn primary">${uiIcon('file-code')}保存用户名与密码</button>
       </div>
     </form>
   </section>
@@ -3294,7 +3426,7 @@ async function system() {
           <b>${esc(x.name)}</b>
           <div class="muted">${esc(x.time)} · ${(x.size / 1024).toFixed(1)} KB</div>
         </div>
-        <button class="btn small" onclick="restoreBackup('${encodeURIComponent(x.name)}')">⟲ 恢复此快照</button>
+        <button class="btn small" onclick="restoreBackup('${encodeURIComponent(x.name)}')">${uiIcon('refresh-cw')}恢复此快照</button>
       </div>
     `).join('') : '<div class="empty">暂无备份快照</div>'}
   </section>`;
@@ -3351,7 +3483,7 @@ async function maintenance() {
         <input id="uninstallConfirmation" required autocomplete="off" placeholder="UNINSTALL">
       </div>
       <div class="span2" style="margin-top:14px;">
-        <button class="btn danger">⛔ 卸载管理后台</button>
+        <button class="btn danger">${uiIcon('shield-check')}卸载管理后台</button>
       </div>
     </form>
   </section>`;
@@ -3385,6 +3517,7 @@ async function uninstallManager(e) {
 }
 
 function openModal(title, html) {
+  closeSniScanner();
   if ($('modal').classList.contains('hidden')) S.modalFocus = document.activeElement;
   $('modalTitle').textContent = title.replace(/^[A-Z_0-9 ]+\s*\/\/\s*/, '');
   $('modalBody').innerHTML = html;
@@ -3394,6 +3527,7 @@ function openModal(title, html) {
 }
 
 function closeModal() {
+  closeSniScanner();
   if ($('modal').classList.contains('hidden')) return;
   $('modal').querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
   S.jobView = null;
@@ -3441,7 +3575,7 @@ const OPTION_LABELS = {
   DIRECT: 'DIRECT（中国大陆直连）',
   REJECT: 'REJECT（拦截连接）',
   'REJECT-DROP': 'REJECT-DROP（静默丢弃）',
-  '✈️ Proxy': '✈️ Proxy（统一代理节点）',
+  '✈️ Proxy': '统一代理节点',
   'DOMAIN-SUFFIX': 'DOMAIN-SUFFIX（域名后缀）',
   DOMAIN: 'DOMAIN（完整域名）',
   'DOMAIN-KEYWORD': 'DOMAIN-KEYWORD（域名关键词）',
@@ -3733,7 +3867,7 @@ function nodeModal(index) {
       <div class="grid">
         <div>
           <label>节点名称</label>
-          <input id="nName" required value="${esc(cfg.name || '')}" placeholder="例如 美国 Mxioc VLESS 🇺🇸">
+          <input id="nName" required value="${esc(cfg.name || '')}" placeholder="例如 美国 Mxioc VLESS">
         </div>
         <div>
           <label>协议类型</label>
@@ -3854,7 +3988,7 @@ function groupModal(index) {
       <div class="grid">
         <div>
           <label>策略组名称</label>
-          <input id="gName" required value="${esc(cfg.name || '')}" placeholder="例如 ☁️ 甲骨文 Oracle">
+          <input id="gName" required value="${esc(cfg.name || '')}" placeholder="例如 甲骨文 Oracle">
         </div>
         <div>
           <label>策略组类型</label>
@@ -3877,7 +4011,7 @@ function groupModal(index) {
     </fieldset>
 
     <div id="formError" class="error"></div>
-    <button class="btn primary" style="margin-top:16px;">💾 保存策略组并写入 YAML</button>
+    <button class="btn primary" style="margin-top:16px;">${uiIcon('file-code')}保存策略组并写入 YAML</button>
   </form>`);
 
   renderGroupExtra();
@@ -3937,7 +4071,7 @@ function ruleModal(index) {
       </details>
     </div>
     <div id="formError" class="error"></div>
-    <button class="btn primary" style="margin-top:16px;">💾 保存规则并写入 YAML</button>
+    <button class="btn primary" style="margin-top:16px;">${uiIcon('file-code')}保存规则并写入 YAML</button>
   </form>`);
 
   $('editForm').onsubmit = async e => {
@@ -3988,7 +4122,7 @@ function dnsModal(encoded) {
     <label>上游服务器列表（一行一条）</label>
     <textarea id="dnsServers">${esc((x?.servers || ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']).join('\n'))}</textarea>
     <div id="formError" class="error"></div>
-    <button class="btn primary" style="margin-top:16px;">💾 保存 DNS 分流策略</button>
+    <button class="btn primary" style="margin-top:16px;">${uiIcon('file-code')}保存 DNS 分流策略</button>
   </form>`);
 
   $('editForm').onsubmit = async e => {
@@ -4020,7 +4154,7 @@ function importNodeModal() {
     </label>
     <div id="formError" class="error"></div>
     <div id="importResult" class="note hidden" style="margin-top:14px;"></div>
-    <button class="btn primary" style="margin-top:16px;">⚡ 批量解析并写入 YAML</button>
+    <button class="btn primary" style="margin-top:16px;">${uiIcon('activity')}批量解析并写入 YAML</button>
   </form>`);
 
   $('editForm').onsubmit = async e => {
@@ -4125,7 +4259,7 @@ function profileCreate(templateId = 'blank') {
         </div>
       </div>
       <div id="formError" class="error"></div>
-      <button class="btn primary" style="margin-top:14px;">＋ 创建并初始化该订阅</button>
+      <button class="btn primary" style="margin-top:14px;">${uiIcon('circle-plus')}创建并初始化该订阅</button>
     </fieldset>
   </form>`);
 
@@ -4182,7 +4316,7 @@ function profileEdit(encoded) {
       <div class="hint">自定义标识至少 32 位；短地址会被服务器拒绝。</div>
     </div>
     <div id="formError" class="error"></div>
-    <button class="btn primary" style="margin-top:16px;">💾 保存修改</button>
+    <button class="btn primary" style="margin-top:16px;">${uiIcon('file-code')}保存修改</button>
   </form>`);
 
   $('editProfile').onsubmit = async e => {
@@ -4391,10 +4525,11 @@ $('loginForm').onsubmit = async e => {
   }
 };
 
-document.querySelectorAll('.nav').forEach(n => n.onclick = () => go(n.dataset.page).catch(error => notice('加载失败：' + error.message)));
+document.querySelectorAll('.nav').forEach(n => n.onclick = () => { if(n.dataset.page==='monitoring')S.monitorId=''; return go(n.dataset.page).catch(error => notice('加载失败：' + error.message)); });
 $('modalClose').onclick = closeModal;
 $('modal').onclick = e => { if (e.target === $('modal')) e.stopPropagation(); };
 document.addEventListener('keydown', e => {
+  if(S.sniScan) { if(e.key==='Escape'){e.preventDefault();closeSniScanner();} return; }
   if ($('modal').classList.contains('hidden')) return;
   if (e.key === 'Escape') closeModal();
   if (e.key !== 'Tab') return;

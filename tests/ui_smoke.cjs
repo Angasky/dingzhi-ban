@@ -6,7 +6,7 @@ const dom=new JSDOM(html,{url:'https://vpn.mxvv.cn/admin/',runScripts:'outside-o
 const w=dom.window;
 w.alert=()=>{}; w.confirm=()=>true; w.matchMedia=()=>({matches:false});
 const script=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]).join('\n').replace('void bootstrap();','');
-w.eval(script+'\nwindow.testUI={S,traffic,nodeBandwidthModal,bandwidthLabel,chainModal,chains,failoverModal,conversionRows,profileClientLinks,nativeApi:api,chooseNodeServer,remoteNodeLinks,renderRemoteNodes,serverForm,remoteNodeForm,renderServers,testSniCandidates,setApi:fn=>api=fn};');
+w.eval(script+'\nwindow.testUI={S,traffic,nodeBandwidthModal,bandwidthLabel,chainModal,chains,failoverModal,conversionRows,profileClientLinks,nativeApi:api,chooseNodeServer,remoteNodeLinks,renderRemoteNodes,serverForm,remoteNodeForm,renderServers,sniCandidates,setApi:fn=>api=fn};');
 const t=w.testUI,$=id=>w.document.getElementById(id);
 t.S.data={nodes:[{index:0,name:'entry',server:'198.51.100.1',config:{type:'ss',server:'198.51.100.1',port:443}},{index:1,name:'exit',server:'198.51.100.2',config:{type:'ss',server:'198.51.100.2',port:443}}],groups:[],rules:[],profile:{name:'test',traffic:{configured:false,bindings:[{name:'owned',port:443,serverId:'s',inboundId:1,status:'active'}]}}};
 t.S.servers=[{id:'native',name:'sing',host:'198.51.100.1',sshPort:22,sshUser:'root',installType:'sing-box',fingerprint:'SHA256:'+'a'.repeat(43)}];
@@ -61,8 +61,7 @@ t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/servers')return
  $('rnName').value='tuic-test';$('rnCert').value='/etc/cert.pem';$('rnKey').value='/etc/key.pem';await $('remoteNodeForm').onsubmit({preventDefault(){}});
  const node=JSON.parse(requests.find(r=>r[0]==='/servers/inbounds')[1].body);assert.equal(node.template,'tuic');assert.equal(node.certFile,'/etc/cert.pem');
  t.setApi(async(path,opt)=>({results:JSON.parse(opt.body).candidates.map(domain=>({domain,ok:true,latencyMs:20,tls:'TLSv1.3',alpn:'h2'}))}));
- $('rnSniList').value=Array.from({length:21},(_,i)=>`sni${i}.example.com`).join('\n');await t.testSniCandidates('native','rnSni','rnSniList','rnSniResults',$('rnSniTest'));
- const options=$('rnSniResults').querySelectorAll('[data-domain]');assert.equal(options.length,21);options[20].click();assert.equal($('rnSni').value,'sni20.example.com');
+ assert(t.sniCandidates().length>=60);assert($('rnSniTest'));assert(!$('rnSniList'));
  t.S.profile='clash';t.S.page='nodes';t.S.profiles=[{id:'clash',name:'test'}];
  const remote={id:7,port:24443,enable:true,protocol:'shadowsocks',remark:'dedicated',shareLinks:['ss://server-source#dedicated']};
  t.setApi(async(path,opt)=>{
