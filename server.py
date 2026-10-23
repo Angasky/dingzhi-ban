@@ -137,7 +137,7 @@ SUPPORTED_NODE_TYPES = {"vless", "tuic", "hysteria2", "trojan", "ss", "vmess", "
 CONVERSION_FORMATS = {
     "v2rayn": {
         "name": "电脑 v2rayN 节点订阅", "types": SUPPORTED_NODE_TYPES,
-        "note": "新版 v2rayN；首个真实节点名称附带用量/到期摘要，更新订阅刷新。TUIC/Hysteria2 需选择支持的内核；节点列表不含主备逻辑。",
+        "note": "新版 v2rayN；独立信息节点显示流量和剩余时间，更新订阅刷新。信息节点不可连接；TUIC/Hysteria2 需支持的内核。",
     },
     "v2rayng": {
         "name": "安卓 v2rayNG 节点订阅", "types": SUPPORTED_NODE_TYPES - {"tuic"},
@@ -1138,6 +1138,28 @@ def save_remote_server(payload):
         return remote_manager().save(payload)
 
 
+def detach_remote_server(server_id, confirmed=False):
+    """Forget this controller's ownership only; never contact or delete remote nodes."""
+    with ENFORCEMENT_LOCK, LOCK:
+        manager = remote_manager()
+        record = manager.record(server_id)
+        data = load_profiles()
+        bindings = [b for p in data["profiles"] for b in p.get("remoteNodes", [])
+                    if b.get("serverId") == server_id and b.get("status") == "active"]
+        if (bindings or record.get("bandwidths")) and confirmed is not True:
+            raise ValueError("请确认解除本总控的订阅绑定；远端节点与限速规则将保留，不再由本总控计量或到期撤销")
+        original = copy.deepcopy(data)
+        for binding in bindings:
+            binding.update(status="detached", detachedAt=int(time.time()))
+        save_profiles(data)
+        try:
+            manager.remove(server_id, detach=True)
+        except Exception:
+            save_profiles(original)
+            raise
+        return {"detachedBindings": len(bindings), "remotePreserved": True}
+
+
 def subscription_userinfo(record):
     info = traffic_info(record)
     if not info["configured"]:
@@ -1491,6 +1513,15 @@ def get_cached_config(path):
     doc = yaml_load(text)
     if not isinstance(doc, dict):
         raise ValueError("配置文件不是有效的 YAML 对象")
+    # New Xray REALITY servers require the hybrid key share; keep old profiles usable.
+    changed = False
+    for node in doc.get("proxies", []) or []:
+        reality = node.get("reality-opts")
+        if isinstance(reality, dict) and reality and "support-x25519mlkem768" not in reality:
+            reality["support-x25519mlkem768"] = True
+            changed = True
+    if changed:
+        text = yaml_dump(doc)
 
     with CONFIG_CACHE_LOCK:
         cache_config_entry(key, {
@@ -1669,6 +1700,7 @@ def normalize_reality_options(node):
     if not isinstance(options, dict) or "short-id" not in options:
         return node
     options = dict(options)
+    options.setdefault("support-x25519mlkem768", True)
     raw = options.get("short-id")
     short_id = "" if raw is None else str(raw).strip()
     if not short_id or short_id.lower() in ("null", "none"):
@@ -2372,21 +2404,18 @@ def converted_subscription(profile_id, format_id):
     doc, _ = get_cached_config(current_files(profile_id)[0])
     info = CONVERSION_FORMATS[format_id]
     links, skipped = [], []
-    from client_adapter import usage_label
-    label = usage_label(traffic_info(profile_record(profile_id))).replace("剩余 ", "可用 ").replace("到期 ", "有效至 ") if format_id == "v2rayn" else ""
+    from client_adapter import usage_nodes
     for node in doc.get("proxies", []) or []:
         if node.get("dialer-proxy") or str(node.get("type", "")).lower() not in info["types"]:
             skipped.append(str(node.get("name", "未知节点")))
             continue
         try:
-            exported = node
-            if label and not links:
-                exported = {**node, "name": f"[{label}] {node['name']}"}
-            links.append(node_to_uri(exported))
+            links.append(node_to_uri(node))
         except Exception:
             skipped.append(str(node.get("name", "未知节点")))
     if not links:
         raise ValueError("没有可转换的兼容节点")
+    links = [node_to_uri(node) for node in usage_nodes(traffic_info(profile_record(profile_id)))] + links
     raw = "\n".join(links).encode("utf-8")
     return base64.b64encode(raw), skipped
 
@@ -3369,11 +3398,7 @@ class Handler(BaseHTTPRequestHandler):
                 delete_profile(str(data.get("id", "")))
                 return self.json_out({"ok": True})
             if path == "/admin/api/servers":
-                if any(b.get("status") == "active" and b["serverId"] == str(data.get("id", ""))
-                       for r in load_profiles()["profiles"] for b in r.get("remoteNodes", [])):
-                    raise ValueError("服务器仍有关联订阅节点，请先删除远端专属入站")
-                remote_manager().remove(str(data.get("id", "")))
-                return self.json_out({"ok": True})
+                return self.json_out({"ok": True, **detach_remote_server(str(data.get("id", "")), data.get("detach", False))})
             if path == "/admin/api/servers/inbounds":
                 with ENFORCEMENT_LOCK:
                     server_id, identity = str(data.get("serverId", "")), int(data.get("inboundId"))

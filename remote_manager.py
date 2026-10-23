@@ -583,9 +583,9 @@ class RemoteManager:
             self.flush()
             return self.public(record)
 
-    def remove(self, server_id):
+    def remove(self, server_id, *, detach=False):
         with self.lock:
-            if self.record(server_id).get("bandwidths"):
+            if self.record(server_id).get("bandwidths") and not detach:
                 raise ValueError("服务器仍有节点限速，请先取消限速再移除服务器")
             if self.server_locks.get(server_id, threading.Lock()).locked():
                 raise ValueError("该服务器正在处理节点操作，请稍后移除")
@@ -1372,7 +1372,8 @@ def inbound_nodes(inbound, record):
             if not public_key:
                 continue
             node.update(servername=(reality.get("serverNames") or [""])[0], **{"client-fingerprint": "chrome", "reality-opts": {
-                "public-key": public_key, "short-id": (reality.get("shortIds") or [""])[0]}})
+                "public-key": public_key, "short-id": (reality.get("shortIds") or [""])[0],
+                "support-x25519mlkem768": True}})
         result.append(node)
     return result
 

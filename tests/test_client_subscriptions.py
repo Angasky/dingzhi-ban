@@ -57,12 +57,30 @@ class ClientSubscriptionTests(unittest.TestCase):
         before=copy.deepcopy(server.read_config())
         desktop,_=server.converted_subscription('clash','v2rayn')
         first=server.parse_node_link(base64.b64decode(desktop).decode().splitlines()[0])
-        self.assertIn('已用',first['name']);self.assertIn('可用',first['name']);self.assertIn('有效至',first['name'])
-        self.assertEqual(first['uuid'],self.nodes[0]['uuid'])
+        self.assertIn('已用',first['name'])
+        self.assertEqual(first['server'],'127.0.0.1')
+        entries=[server.parse_node_link(link) for link in base64.b64decode(desktop).decode().splitlines()]
+        self.assertIn('剩余流量',entries[1]['name'])
+        self.assertIn('剩余',entries[2]['name'])
+        self.assertEqual(entries[3]['name'],self.nodes[0]['name'])
+        self.assertEqual(entries[3]['uuid'],self.nodes[0]['uuid'])
         mobile,skipped=server.converted_subscription('clash','v2rayng')
         self.assertEqual(skipped,['TUIC']);self.assertNotIn('tuic://',base64.b64decode(mobile).decode())
         self.assertIn('TUIC',[n['name'] for n in server.read_config()['proxies']])
         self.assertEqual(before,server.read_config())
+
+    def test_usage_nodes_for_all_uri_clients_and_unconfigured_profiles(self):
+        for kind in ('v2rayn','v2rayng','v2ray','shadowrocket'):
+            body,_=server.converted_subscription('clash',kind)
+            entries=[server.parse_node_link(link) for link in base64.b64decode(body).decode().splitlines()]
+            self.assertTrue(all(n['server']=='127.0.0.1' and n['port']==9 for n in entries[:3]))
+            self.assertEqual(entries[3]['name'],self.nodes[0]['name'])
+        self.assertEqual(client_adapter.usage_nodes({'configured':False}),[])
+
+    def test_clash_export_enables_hybrid_reality_keyshare(self):
+        doc,text=server.get_cached_config(server.FILES[0])
+        self.assertIs(doc['proxies'][0]['reality-opts']['support-x25519mlkem768'],True)
+        self.assertIn('support-x25519mlkem768: true',text)
 
     def test_shadowrocket_paired_names_match_exactly_without_direct_or_unknown_members(self):
         body,_=server.converted_subscription('clash','shadowrocket-ha')

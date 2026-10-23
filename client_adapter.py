@@ -2,10 +2,31 @@
 import copy
 import hashlib
 import re
+import math
+import time
 from datetime import datetime, timezone
 
 XRAY_TYPES = {'vless', 'vmess', 'trojan', 'ss', 'socks5', 'http'}
 V2RAYNG_TYPES = XRAY_TYPES | {'hysteria2'}
+
+
+def usage_nodes(info):
+    """Display-only entries: reserved loopback discard port, no real credentials."""
+    if not info.get('configured'):
+        return []
+    def gib(value):
+        return f'{value / 1024**3:.2f} GB'
+    total = gib(info['total']) if info.get('total') is not None else '不限量'
+    remaining = gib(info['remaining']) if info.get('remaining') is not None else '不限量'
+    expire = info.get('expire')
+    duration = ('长期有效' if expire is None else
+                ('已到期' if expire <= time.time() else f'剩余 {math.ceil((expire-time.time())/86400)} 天'))
+    labels = [f'订阅信息 · 已用 {gib(info["used"])} / 总量 {total}',
+              f'订阅信息 · 剩余流量 {remaining}',
+              f'订阅信息 · {duration}' + (f' · 到期 {datetime.fromtimestamp(expire, timezone.utc):%Y-%m-%d %H:%M UTC}' if expire is not None else '')]
+    return [{'name': label, 'type': 'vmess', 'server': '127.0.0.1', 'port': 9,
+             'uuid': '00000000-0000-4000-8000-000000000000', 'alterId': 0,
+             'cipher': 'auto', 'network': 'tcp'} for label in labels]
 
 
 def usage_label(info):

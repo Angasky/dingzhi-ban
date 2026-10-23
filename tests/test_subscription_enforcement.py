@@ -61,6 +61,28 @@ class EnforcementTests(unittest.TestCase):
         server.enforce_profile('clash')
         self.assertEqual(server.traffic_info(server.profile_record())['used'], 330)
 
+    def test_detach_server_preserves_remote_and_stops_local_enforcement(self):
+        self.configure()
+        self.manager.record.return_value = {'bandwidths': {'1': {}}}
+        with self.assertRaisesRegex(ValueError, '请确认'):
+            server.detach_remote_server('server-a')
+        result = server.detach_remote_server('server-a', True)
+        self.assertEqual(result, {'detachedBindings': 1, 'remotePreserved': True})
+        self.manager.remove.assert_called_once_with('server-a', detach=True)
+        self.assertEqual(server.profile_record()['remoteNodes'][0]['status'], 'detached')
+        server.enforce_profile('clash')
+        self.manager.inbounds.assert_not_called()
+        self.manager.delete_inbound.assert_not_called()
+        self.manager.set_bandwidth.assert_not_called()
+
+    def test_failed_detach_restores_local_bindings(self):
+        self.configure()
+        self.manager.record.return_value = {}
+        self.manager.remove.side_effect = ValueError('安装任务进行中')
+        with self.assertRaisesRegex(ValueError, '安装任务'):
+            server.detach_remote_server('server-a', True)
+        self.assertEqual(server.profile_record()['remoteNodes'][0]['status'], 'active')
+
     def test_combined_inbounds_exhaustion_deletes_only_owned_nodes(self):
         record = self.configure(total=500)
         record['remoteNodes'].append({'serverId': 'server-a', 'inboundId': 2, 'port': 4444,
