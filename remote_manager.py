@@ -287,15 +287,30 @@ def parse_panel_settings(output, record):
 class PanelAPI:
     """HTTP runs inside a host-key-verified SSH channel to remote loopback only."""
 
-    def __init__(self, ssh, record, token, password=""):
+    def __init__(self, ssh, record, token, password="", session=None):
         self.ssh, self.record, self.token = ssh, record, token
-        self.cookies, self.csrf = {}, ""
-        self.password, self.logged_in = password, False
-        self.legacy_csrf = False
-        self.api_prefix = "panel/api"
-        self.web_prefix = "panel"
+        self.session = session if session is not None else {}
+        self.cookies, self.csrf = dict(self.session.get("cookies", {})), self.session.get("csrf", "")
+        self.password, self.logged_in = password, self.session.get("logged_in", False)
+        self.legacy_csrf = self.session.get("legacy_csrf", False)
+        self.api_prefix = self.session.get("api_prefix", "panel/api")
+        self.web_prefix = self.session.get("web_prefix", "panel")
 
     def request(self, path, payload=None, *, method=None, bearer=True):
+        try:
+            return self._request(path, payload, method=method, bearer=bearer)
+        except PanelSessionExpired:
+            # Retry only an explicit authentication rejection, never a timeout,
+            # HTML response, CSRF error or an ambiguous mutation failure.
+            if path in ("login", "csrf-token"):
+                raise ValueError("远端面板认证失败，请核对账号、密码和双因素验证设置") from None
+            return self._request(path, payload, method=method, bearer=bearer)
+
+    def _request(self, path, payload=None, *, method=None, bearer=True):
+        if path == "login" and self.session.get("login_blocked_until", 0) > time.monotonic():
+            raise ValueError("远端面板登录失败后已暂停重试 60 秒，请检查账号、密码及双因素验证；更新连接凭证可立即重试")
+        if path == "login" and self.logged_in and payload == {"username": self.record["panelUser"], "password": self.password}:
+            return None
         # Xray configuration routes are session-only, unlike /panel/api.
         if path.lstrip("/").startswith("panel/xray/") or (not self.token and path not in ("login", "csrf-token")):
             if not self.logged_in:
@@ -371,6 +386,11 @@ class PanelAPI:
             if len(raw) > 4 * 1024 * 1024:
                 raise ValueError("3x-ui 返回的数据超过 4 MB，请减少单面板入站数量")
             if response.status != 200:
+                if response.status == 401 and not bearer:
+                    self.cookies, self.csrf, self.logged_in = {}, "", False
+                    if path == "login":
+                        self.session["login_blocked_until"] = time.monotonic() + 60
+                    raise PanelSessionExpired("远端面板登录会话已过期")
                 if response.status == 404 and path == "csrf-token" and self.record.get("connectionMode") == "existing":
                     self.legacy_csrf = True
                     return None
@@ -383,6 +403,9 @@ class PanelAPI:
             except ValueError as exc:
                 raise ValueError("3x-ui 返回非 JSON 内容，请确认面板版本和访问路径") from exc
             if not isinstance(result, dict) or result.get("success") is not True:
+                if path == "login":
+                    self.logged_in = False
+                    self.session["login_blocked_until"] = time.monotonic() + 60
                 message = str(result.get("msg", "接口操作未成功") if isinstance(result, dict) else "响应无效")
                 raise ValueError("3x-ui：" + clean_log(message, [self.password, self.token, self.csrf, *self.cookies.values()])[:500])
             value = result.get("obj")
@@ -390,16 +413,24 @@ class PanelAPI:
                 self.csrf = value
             if path == "login":
                 self.logged_in = True
+                self.session.pop("login_blocked_until", None)
             return value
         finally:
+            self.session.update(cookies=dict(self.cookies), csrf=self.csrf, logged_in=self.logged_in,
+                                legacy_csrf=self.legacy_csrf, api_prefix=self.api_prefix, web_prefix=self.web_prefix)
             connection.close()
             client.close()
             channel.close()
             bridge.close()
 
 
+class PanelSessionExpired(ValueError):
+    pass
+
+
 class RemoteManager:
     def __init__(self, root, parse_link, node_uri):
+        self.panel_sessions = {}
         _, Fernet = libraries()
         self.root = Path(root) / "remote"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -562,6 +593,7 @@ class RemoteManager:
                 raise ValueError("请等待安装任务结束再移除管理")
             self.data["servers"] = [x for x in self.data["servers"] if x["id"] != server_id]
             self.data["jobs"] = [x for x in self.data["jobs"] if x["serverId"] != server_id]
+            self.panel_sessions.pop(server_id, None)
             self.flush()
 
     def probe(self, payload):
@@ -667,6 +699,33 @@ echo '=== DNS ==='
             return CoreAPI(self, ssh, record)
         if record.get("connectionMode") == "existing" and record.get("panelAddress"):
             settings = parse_panel_address(record["panelAddress"])
+        elif install_type(record) == "x-panel":
+            # X-Panel's `setting` command initializes/migrates its database even
+            # for queries. Never launch that CLI against a running panel.
+            script = """python3 - <<'MXIOC_PANEL_READONLY'
+import json, os, sqlite3
+from pathlib import Path
+paths = [Path(os.environ.get('XUI_DB_FOLDER', '/etc/x-ui')) / 'x-ui.db', Path('/usr/local/x-ui/x-ui.db')]
+for path in paths:
+    if not path.is_file():
+        continue
+    with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=5) as db:
+        db.execute('PRAGMA query_only=ON')
+        values = dict(db.execute("SELECT key,value FROM settings WHERE key IN ('webPort','webBasePath','webCertFile','webKeyFile','webDomain')"))
+    print(json.dumps(values))
+    break
+else:
+    raise SystemExit('Panel database not found; configure the complete existing panel URL')
+MXIOC_PANEL_READONLY"""
+            code, raw = self.execute(ssh, record, script, timeout=20)
+            if code:
+                raise ValueError("X-Panel 只读配置读取失败，请在连接设置填写现有面板完整地址（含端口及路径）")
+            values = json_object(raw)
+            domain = valid_domain(values.get("webDomain") or record.get("domain"))
+            record["domain"] = domain
+            settings = parse_panel_settings("port: " + str(values.get("webPort", 13688)) + "\nwebBasePath: " +
+                                            str(values.get("webBasePath", "/")) + "\ncert: " +
+                                            str(values.get("webCertFile", "")) + "\n", record)
         else:
             code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -show true && { ./x-ui setting -getCert true 2>/dev/null || true; }", timeout=30)
             if code:
@@ -676,6 +735,21 @@ echo '=== DNS ==='
             self.record(record["id"]).update(settings)
             self.flush()
         record.update(settings)
+        if install_type(record) == "x-panel":
+            # Keep credentials/cookies exclusively in controller memory. Binding
+            # includes SSH identity and the exact panel endpoint, not just IP.
+            identity = hashlib.sha256(json.dumps([record.get(key) for key in (
+                "host", "sshPort", "sshUser", "sshPassword", "fingerprint", "panelUser", "panelPassword",
+                "panelPort", "panelPath", "panelTLS", "panelAddress", "domain")], sort_keys=True).encode()).hexdigest()
+            with self.lock:
+                cached = self.panel_sessions.get(record["id"])
+                if not cached or cached["identity"] != identity:
+                    cached = {"identity": identity, "state": {}}
+                    self.panel_sessions[record["id"]] = cached
+                self.panel_sessions[record["id"]] = self.panel_sessions.pop(record["id"])
+                while len(self.panel_sessions) > 128:
+                    self.panel_sessions.pop(next(iter(self.panel_sessions)))
+            return PanelAPI(ssh, record, "", self.secret(record, "panelPassword"), cached["state"])
         code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -getApiToken true", timeout=30)
         token = re.search(r"(?m)^apiToken:[ \t]*(\S+)", output)
         if (code or not token) and record.get("connectionMode") != "existing":

@@ -289,9 +289,7 @@ class RemoteManagerTests(unittest.TestCase):
         self.assertEqual(api.record['panelPath'], '/riben/')
         self.assertTrue(api.record['panelTLS'])
         self.assertEqual(api.record['panelUrl'], address)
-        self.assertEqual(execute.call_count, 1)
-        self.assertIn('getApiToken', execute.call_args.args[2])
-        self.assertNotIn('-show true', execute.call_args.args[2])
+        execute.assert_not_called()
         self.assertEqual(self.manager.public(self.manager.record(self.identity))['panelAddress'], address)
         self.manager.save({**self.payload, 'id': self.identity, 'installType':'x-panel',
                            'connectionMode':'existing', 'panelAddress':''})
