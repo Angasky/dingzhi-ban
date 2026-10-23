@@ -3,6 +3,8 @@ import hashlib
 import hmac
 import base64
 import io
+import gzip
+import uuid
 import json
 import os
 import copy
@@ -98,6 +100,8 @@ LOGIN_MAX_FAILURES = 5
 LOGIN_FAILURES = {}
 LOGIN_LOCK = threading.RLock()
 LOCK = threading.RLock()
+ENFORCEMENT_LOCK = threading.RLock()
+ENFORCEMENT_INTERVAL = 30
 UPDATE_LOCK = threading.RLock()
 GEO_LOCK = threading.RLock()
 GEO_RATE_LOCK = threading.Lock()
@@ -105,6 +109,7 @@ GEO_CACHE = {}
 GEO_NEXT_REQUEST = 0.0
 REMOTE_MANAGERS = {}
 REMOTE_MANAGER_LOCK = threading.RLock()
+HOST_MONITOR = None
 CTX = threading.local()
 MAX_BODY = 2 * 1024 * 1024
 MAX_SUBSCRIPTION = 8 * 1024 * 1024
@@ -117,12 +122,47 @@ def remote_manager():
         if key not in REMOTE_MANAGERS:
             REMOTE_MANAGERS[key] = RemoteManager(ROOT, parse_node_link, node_to_uri)
         return REMOTE_MANAGERS[key]
+
+def host_metrics(identity):
+    from server_monitor import HostMonitor
+    global HOST_MONITOR
+    with REMOTE_MANAGER_LOCK:
+        if HOST_MONITOR is None:
+            HOST_MONITOR = HostMonitor()
+    return HOST_MONITOR.sample(remote_manager(), identity)
+
 BUILTINS = {"DIRECT", "REJECT", "REJECT-DROP", "PASS"}
 NON_NODE_GROUPS = {"🛑 广告拦截", "🛡️ 基础广告拦截", "🔥 强力广告拦截"}
 SUPPORTED_NODE_TYPES = {"vless", "tuic", "hysteria2", "trojan", "ss", "vmess", "socks5", "http"}
 CONVERSION_FORMATS = {
+    "v2rayn": {
+        "name": "电脑 v2rayN 节点订阅", "types": SUPPORTED_NODE_TYPES,
+        "note": "新版 v2rayN；首个真实节点名称附带用量/到期摘要，更新订阅刷新。TUIC/Hysteria2 需选择支持的内核；节点列表不含主备逻辑。",
+    },
+    "v2rayng": {
+        "name": "安卓 v2rayNG 节点订阅", "types": SUPPORTED_NODE_TYPES - {"tuic"},
+        "note": "新版 v2rayNG；提供标准流量和到期响应头，过滤不支持的 TUIC。节点列表不含主备逻辑。",
+    },
+    "v2rayn-ha": {
+        "name": "电脑 v2rayN · Xray 主备配置", "types": set(), "kind": "xray-ha",
+        "extension": ".json", "contentType": "application/json; charset=utf-8",
+        "note": "作为独立订阅导入，使用新版 Xray 内核；每个主备组生成一份自定义配置，按顺序切换及恢复切回。SOCKS/HTTP 端口 10808/10809。",
+    },
+    "v2rayng-ha": {
+        "name": "安卓 v2rayNG · Xray 主备配置", "types": set(), "kind": "xray-ha",
+        "extension": ".json", "contentType": "application/json; charset=utf-8",
+        "note": "新版 v2rayNG 自定义 JSON 订阅；每个主备组一份完整 Xray 配置，不与普通节点订阅混用。端口需与 App 的本地 SOCKS 设置一致（默认 10808）。",
+    },
+    "shadowrocket-ha": {
+        "name": "小火箭主备 · 第一步：节点订阅", "types": SUPPORTED_NODE_TYPES, "kind": "shadowrocket-nodes",
+        "note": "添加到首页订阅。仅包含受管主备组的转发路径，名称与第二步策略配置对应；流量与到期信息随订阅更新。",
+    },
+    "shadowrocket-config": {
+        "name": "小火箭主备 · 第二步：策略配置", "types": set(), "kind": "shadowrocket-config", "extension": ".conf",
+        "note": "先导入第一步节点，再在配置页添加并启用此配置，使用配置路由。按优先顺序 fallback，勿开启可能跳到其他出口的全局回退；恢复切回仍需在 iPhone 实测。",
+    },
     "v2ray": {
-        "name": "V2Ray / v2rayN 通用订阅",
+        "name": "V2Ray 通用节点订阅（兼容旧链接）",
         "types": SUPPORTED_NODE_TYPES,
         "note": "适合新版 v2rayN；旧版 V2Ray/v2rayNG 可能不支持 TUIC、Hysteria2 或 Reality。",
     },
@@ -367,8 +407,16 @@ def load_profiles():
 def save_profiles(data):
     global PROFILES_CACHE, PROFILES_MTIME
     text = json.dumps(data, ensure_ascii=False, indent=2)
-    PROFILES_FILE.write_text(text, encoding="utf-8")
-    os.chmod(PROFILES_FILE, 0o600)
+    descriptor, temporary = tempfile.mkstemp(prefix=".profiles-", dir=str(PROFILES_FILE.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, PROFILES_FILE)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     PROFILES_CACHE = data
     PROFILES_MTIME = PROFILES_FILE.stat().st_mtime_ns
 
@@ -459,9 +507,15 @@ def public_profile(record):
 
 
 def traffic_info(record):
+    with LOCK:
+        return _traffic_info(record)
+
+
+def _traffic_info(record):
     stored = record.get("traffic") or {}
     if not stored.get("enabled"):
-        return {"configured": False}
+        return {"configured": False, "bindings": copy.deepcopy(record.get("remoteNodes", [])),
+                "enforcementError": record.get("enforcementError", "")}
     upload = stored.get("upload", 0)
     download = stored.get("download", 0)
     total = stored.get("total")
@@ -473,13 +527,30 @@ def traffic_info(record):
             "percent": min(100, round(used / total * 100, 2)) if total else 0,
             "exhausted": total is not None and used >= total,
             "expired": expire is not None and expire <= int(time.time()),
-            "updatedAt": stored.get("updatedAt")}
+            "updatedAt": stored.get("updatedAt"), "enforce": bool(stored.get("enforce")),
+            "bindings": copy.deepcopy(record.get("remoteNodes", [])),
+            "enforcementError": record.get("enforcementError", ""),
+            "lastCheckedAt": record.get("lastEnforcedAt"),
+            "revoked": bool(record.get("accessRevoked"))}
 
 
 def update_traffic(payload):
+    with ENFORCEMENT_LOCK:
+        if payload.get("enforce") is True:
+            for binding in profile_record().get("remoteNodes", []):
+                if binding.get("status") == "active":
+                    remote_manager().ensure_meter(binding["serverId"], binding["inboundId"])
+        result = _update_traffic(payload)
+        enforce_profile(profile_record()["id"])
+        return traffic_info(profile_record())
+
+
+def _update_traffic(payload):
     with LOCK:
         record = profile_record()
         if payload.get("enabled") is False:
+            if record.get("accessRevoked"):
+                raise ValueError("节点已撤销，请先续期/调整额度并重新创建专属节点")
             record.pop("traffic", None)
         else:
             values = {}
@@ -497,9 +568,402 @@ def update_traffic(payload):
                 values[key] = value
             if values["upload"] + values["download"] > 9_007_199_254_740_991:
                 raise ValueError("已用流量超出可支持的范围")
-            record["traffic"] = {"enabled": True, **values, "updatedAt": int(time.time())}
+            enforce = payload.get("enforce", (record.get("traffic") or {}).get("enforce", False))
+            if type(enforce) is not bool:
+                raise ValueError("服务器强制限制参数无效")
+            if enforce and not record.get("accessRevoked") and not any(x.get("status") == "active" for x in record.get("remoteNodes", [])):
+                raise ValueError("请先创建或绑定该订阅专属的服务器入站，再启用强制限制")
+            record["traffic"] = {"enabled": True, **values, "enforce": enforce, "updatedAt": int(time.time())}
+            if not traffic_info(record).get("expired") and not traffic_info(record).get("exhausted"):
+                record.pop("accessRevoked", None)
         save_profiles(load_profiles())
         return traffic_info(record)
+
+
+def subscription_blocked(record):
+    info = traffic_info(record)
+    return bool(record.get("accessRevoked") or (info.get("enforce") and
+                (info.get("expired") or info.get("exhausted"))))
+
+
+def remote_node_identity(row):
+    if not row.get("protocol") or "settings" not in row:
+        return None
+    settings = row["settings"]
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+    identity = {"port": row["port"], "protocol": row["protocol"], "settings": settings}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def bind_remote_node(server_id, inbound_id, profile_id=None):
+    """An entire dedicated inbound has exactly one subscription owner."""
+    with ENFORCEMENT_LOCK:
+        profile_id = profile_record(profile_id)["id"]
+        inbound_id = int(inbound_id)
+        with LOCK:
+            for owner in load_profiles()["profiles"]:
+                for binding in owner.get("remoteNodes", []):
+                    if (binding["serverId"], binding["inboundId"]) == (server_id, inbound_id):
+                        if owner["id"] != profile_id:
+                            raise ValueError("该入站已绑定其他订阅，不能重复计量或跨用户撤销")
+                        if binding.get("status") == "active":
+                            return copy.deepcopy(binding)
+                        raise ValueError("该入站已撤销，请重新创建专属节点")
+        manager = remote_manager()
+        manager.ensure_meter(server_id, inbound_id)
+        rows = manager.inbounds(server_id)["inbounds"]
+        row = next((r for r in rows if r["id"] == inbound_id), None)
+        if not row:
+            raise ValueError("服务器入站不存在")
+        # First binding starts at the current counter, not historic shared usage.
+        binding = {"serverId": server_id, "inboundId": inbound_id, "name": row.get("remark", ""),
+                   "port": row["port"], "status": "active", "up": row.get("up", 0),
+                   "down": row.get("down", 0), "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""}
+        with LOCK:
+            profile_record(profile_id).setdefault("remoteNodes", []).append(binding)
+            save_profiles(load_profiles())
+        return copy.deepcopy(binding)
+
+
+def enforce_profile(profile_id):
+    """Accumulate deltas and retry remote revocation, including after restart.
+
+    No global config lock is held while SSH/network operations are in progress.
+    The enforcement lock serializes quota edits, creation and sweeps.
+    """
+    with ENFORCEMENT_LOCK:
+        with LOCK:
+            record = profile_record(profile_id)
+            bindings = copy.deepcopy([b for b in record.get("remoteNodes", []) if b.get("status") == "active"])
+            enabled = bool((record.get("traffic") or {}).get("enforce"))
+        if not enabled:
+            return
+        manager, snapshots, errors = remote_manager(), {}, []
+        mismatches = set()
+        # Expiry must still revoke nodes when usage retrieval fails.
+        for binding in bindings:
+            server_id = binding["serverId"]
+            if server_id not in snapshots:
+                try:
+                    snapshots[server_id] = {r["id"]: r for r in manager.inbounds(server_id)["inbounds"]}
+                except Exception as exc:
+                    snapshots[server_id] = None
+                    errors.append(str(exc)[:300])
+            rows = snapshots[server_id]
+            if rows is None:
+                continue
+            row = rows.get(binding["inboundId"])
+            with LOCK:
+                current = next(b for b in profile_record(profile_id)["remoteNodes"]
+                               if (b["serverId"], b["inboundId"]) == (server_id, binding["inboundId"]))
+                if row is None:
+                    current.update(status="missing", error="远端入站已不存在")
+                    continue
+                if current.get("identityHash") and current["identityHash"] != remote_node_identity(row):
+                    message = "远端入站身份已变化，已停止自动删除，避免误删复用 ID 的节点"
+                    current["error"] = message
+                    errors.append(message)
+                    mismatches.add((server_id, binding["inboundId"]))
+                    continue
+                stored = profile_record(profile_id)["traffic"]
+                for remote_key, local_key in (("up", "upload"), ("down", "download")):
+                    value = row.get(remote_key, 0)
+                    if type(value) is not int or value < 0:
+                        raise ValueError("服务器流量计数无效")
+                    previous = current.get(remote_key, 0)
+                    delta = value - previous if value >= previous else value
+                    stored[local_key] = stored.get(local_key, 0) + min(delta, max(0, 9_007_199_254_740_991 - stored.get("upload", 0) - stored.get("download", 0)))
+                    current[remote_key] = value
+                stored["updatedAt"] = int(time.time())
+        with LOCK:
+            record = profile_record(profile_id)
+            blocked = subscription_blocked(record)
+            if blocked:
+                # Durable before remote deletion, so a crash cannot re-enable access.
+                record["accessRevoked"] = True
+            record["lastEnforcedAt"] = int(time.time())
+            save_profiles(load_profiles())
+        if blocked:
+            for binding in bindings:
+                if (binding["serverId"], binding["inboundId"]) in mismatches:
+                    continue
+                try:
+                    rows = snapshots.get(binding["serverId"])
+                    if rows is None or binding["inboundId"] in rows:
+                        manager.delete_inbound(binding["serverId"], binding["inboundId"])
+                    manager.disconnect_port(binding["serverId"], binding["port"])
+                    with LOCK:
+                        current = next(b for b in profile_record(profile_id)["remoteNodes"]
+                                       if (b["serverId"], b["inboundId"]) == (binding["serverId"], binding["inboundId"]))
+                        current.update(status="revoked", revokedAt=int(time.time()), error="")
+                except Exception as exc:
+                    message = str(exc)[:300]
+                    errors.append(message)
+                    with LOCK:
+                        current = next(b for b in profile_record(profile_id)["remoteNodes"]
+                                       if (b["serverId"], b["inboundId"]) == (binding["serverId"], binding["inboundId"]))
+                        current["error"] = message
+        with LOCK:
+            profile_record(profile_id)["enforcementError"] = "；".join(dict.fromkeys(errors))[:1500]
+            save_profiles(load_profiles())
+
+
+def enforcement_loop():
+    while True:
+        with LOCK:
+            identities = [r["id"] for r in load_profiles()["profiles"] if (r.get("traffic") or {}).get("enforce")]
+        for identity in identities:
+            try:
+                enforce_profile(identity)
+            except Exception as exc:
+                with LOCK:
+                    try:
+                        profile_record(identity)["enforcementError"] = str(exc)[:500]
+                        save_profiles(load_profiles())
+                    except ValueError:
+                        pass
+        time.sleep(ENFORCEMENT_INTERVAL)
+
+
+def create_owned_remote(payload, relay=False):
+    with ENFORCEMENT_LOCK:
+        profile_id = profile_record()["id"]
+        if subscription_blocked(profile_record(profile_id)):
+            raise ValueError("订阅已到期或流量用尽，请先续期或调整额度")
+        server_id = str(payload.get("serverId", ""))
+        manager = remote_manager()
+        result = (manager.create_relay if relay else manager.create_inbound)(server_id, payload)
+        try:
+            # Creation always records ownership. Metering is explicitly enabled on binding.
+            row = result["inbound"]
+            with LOCK:
+                profile_record(profile_id).setdefault("remoteNodes", []).append({
+                    "serverId": server_id, "inboundId": row["id"], "name": row.get("remark", ""),
+                    "port": row["port"], "status": "active", "up": 0, "down": 0,
+                    "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""})
+                save_profiles(load_profiles())
+            if (profile_record(profile_id).get("traffic") or {}).get("enforce"):
+                manager.ensure_meter(server_id, row["id"])
+        except Exception as exc:
+            try:
+                manager.delete_inbound(server_id, result["inbound"]["id"])
+                with LOCK:
+                    record = profile_record(profile_id)
+                    record["remoteNodes"] = [b for b in record.get("remoteNodes", []) if
+                                             (b["serverId"], b["inboundId"]) != (server_id, result["inbound"]["id"])]
+                    save_profiles(load_profiles())
+            except Exception as cleanup:
+                raise ValueError("节点创建后绑定失败，撤回也失败，请手动核对远端：" + str(cleanup)) from exc
+            raise
+        return result
+
+
+def server_chain(payload):
+    with ENFORCEMENT_LOCK:
+        doc = read_config()
+        nodes = doc.setdefault("proxies", [])
+        entry = next((n for n in nodes if n.get("name") == payload.get("entry")), None)
+        exit_node = next((n for n in nodes if n.get("name") == payload.get("exit")), None)
+        if not entry or not exit_node or entry is exit_node or entry.get("dialer-proxy") or exit_node.get("dialer-proxy"):
+            raise ValueError("请选择两个不同的普通节点")
+        name = str(payload.get("name", "")).strip()
+        if not name or any(n.get("name") == name for n in nodes):
+            raise ValueError("链式代理名称为空或已存在")
+        # Match by an explicit managed address/domain; never trust client-supplied serverId.
+        servers = remote_manager().list()
+        def match(node):
+            found = [s for s in servers if str(node.get("server", "")).strip('[]').lower() in
+                     {str(s["host"]).lower(), str(s.get("domain") or "").lower()}]
+            if len(found) != 1:
+                raise ValueError("节点未唯一匹配总控中的服务器，请选择 Mihomo 客户端专用链式代理模式")
+            return found[0]
+        ingress, egress = match(entry), match(exit_node)
+        if ingress["id"] == egress["id"]:
+            raise ValueError("入口和出口请选择不同服务器，避免本机循环")
+        for node, host in ((entry, ingress), (exit_node, egress)):
+            rows = remote_manager().inbounds(host["id"])["inbounds"]
+            def matches(row):
+                if row.get("port") != node.get("port"):
+                    return False
+                for link in row.get("shareLinks", []):
+                    candidate = parse_node_link(link)
+                    if candidate.get("type") == node.get("type") and all(candidate.get(k) == node.get(k) for k in ("uuid", "password")):
+                        return True
+                return False
+            if not any(matches(row) for row in rows):
+                raise ValueError("节点未匹配服务器中的真实入站，请选择 Mihomo 客户端专用链式代理模式")
+        result = create_owned_remote({**payload, "serverId": ingress["id"], "remark": name,
+                                      "landingLink": node_to_uri(exit_node)}, relay=True)
+        try:
+            if not result.get("shareLinks"):
+                raise ValueError("未返回可导出的中转节点链接")
+            node = parse_node_link(result["shareLinks"][0])
+            node["name"] = name
+            nodes.append(node)
+            set_node_groups(doc, name, payload.get("groups"))
+            write_config(doc, "server-chain")
+            with LOCK:
+                profile_record().setdefault("serverChains", []).append({"name": name, "entry": entry["name"],
+                    "exit": exit_node["name"], "serverId": ingress["id"], "inboundId": result["inbound"]["id"]})
+                save_profiles(load_profiles())
+        except Exception:
+            remote_manager().delete_inbound(ingress["id"], result["inbound"]["id"])
+            with LOCK:
+                profile_record()["remoteNodes"] = [b for b in profile_record().get("remoteNodes", [])
+                    if (b["serverId"], b["inboundId"]) != (ingress["id"], result["inbound"]["id"])]
+                save_profiles(load_profiles())
+            raise
+        return result
+
+
+def remove_server_chain(name):
+    protect_failover_component(name)
+    with ENFORCEMENT_LOCK:
+        record = profile_record()
+        chain = next((c for c in record.get("serverChains", []) if c["name"] == name), None)
+        if not chain:
+            raise ValueError("服务器链路不存在")
+        binding = next((b for b in record.get("remoteNodes", []) if
+                        (b["serverId"], b["inboundId"]) == (chain["serverId"], chain["inboundId"])), None)
+        if binding and binding.get("status") == "active":
+            remote_manager().delete_inbound(chain["serverId"], chain["inboundId"])
+        doc = read_config()
+        if any(n.get("name") == name for n in doc.get("proxies", [])):
+            delete_nodes_from_doc(doc, [name])
+            write_config(doc, "delete-server-chain")
+        with LOCK:
+            if binding:
+                binding.update(status="revoked", revokedAt=int(time.time()))
+            record["serverChains"] = [c for c in record.get("serverChains", []) if c["name"] != name]
+            save_profiles(load_profiles())
+
+
+def protect_failover_component(name):
+    if getattr(CTX, "failover_cleanup", False):
+        return
+    for item in profile_record().get("failovers", []):
+        if name == item["name"] or name in item.get("paths", []):
+            raise ValueError("此项由多入口主备管理，请在链式代理页删除整组后重新配置")
+
+
+def failover_group(name, paths, interval):
+    return {"name": name, "type": "fallback", "proxies": list(paths),
+            "url": "https://www.gstatic.com/generate_204", "interval": interval,
+            "timeout": 5000, "lazy": False, "max-failed-times": 1}
+
+
+def create_failover(payload):
+    # Provisioning and quota revocation must not race each other.
+    with ENFORCEMENT_LOCK:
+        name = str(payload.get("name", "")).strip()
+        entries = payload.get("entries")
+        exit_name = str(payload.get("exit", ""))
+        if not isinstance(entries, list) or not 2 <= len(entries) <= 8 or len(set(entries)) != len(entries):
+            raise ValueError("请选择 2–8 个不重复的入口，按主用到备用排序")
+        interval = int(payload.get("interval", 30))
+        port = int(payload.get("port", 24443))
+        if not 10 <= interval <= 600 or not 1 <= port <= 65535:
+            raise ValueError("检测间隔须为 10–600 秒，端口须为 1–65535")
+        doc = read_config()
+        known = {n["name"] for n in doc.get("proxies", []) + doc.get("proxy-groups", [])}
+        paths = [f"{name} / {i + 1}" for i in range(len(entries))]
+        if not name or any(n in known or n in BUILTINS for n in [name] + paths):
+            raise ValueError("主备组或自动生成的路径名称已存在或为空")
+        if any(f["name"] == name for f in profile_record().get("failovers", [])):
+            raise ValueError("同名主备任务已存在，请先删除")
+        nodes = {n["name"]: n for n in doc.get("proxies", [])}
+        if exit_name in entries or any(n not in nodes or nodes[n].get("dialer-proxy") for n in entries + [exit_name]):
+            raise ValueError("入口与出口必须是不同的普通节点")
+        servers = remote_manager().list()
+        hosts = []
+        for node_name in entries + [exit_name]:
+            node = nodes[node_name]
+            matches = [s for s in servers if str(node["server"]).strip("[]").lower() in
+                       {str(s["host"]).lower(), str(s.get("domain") or "").lower()}]
+            if len(matches) != 1:
+                raise ValueError("节点未唯一匹配总控中的服务器，请选择 Mihomo 客户端专用链式代理模式")
+            hosts.append(matches[0]["id"])
+        if len(set(hosts)) != len(hosts):
+            raise ValueError("每个入口及固定出口必须使用不同服务器")
+        item = {"name": name, "entries": list(entries), "exit": exit_name, "paths": [],
+                "interval": interval, "status": "creating"}
+        with LOCK:
+            profile_record().setdefault("failovers", []).append(item)
+            save_profiles(load_profiles())
+        try:
+            for entry, path in zip(entries, paths):
+                server_chain({**payload, "name": path, "entry": entry, "exit": exit_name,
+                              "groups": [], "port": port})
+                with LOCK:
+                    item["paths"].append(path)
+                    save_profiles(load_profiles())
+            with LOCK:
+                doc = read_config()
+                # Include the group in business selectors, never individual relay paths.
+                set_node_groups(doc, name, payload.get("groups"))
+                doc.setdefault("proxy-groups", []).append(failover_group(name, paths, interval))
+                write_config(doc, "multi-entry-failover")
+                item["status"] = "active"
+                save_profiles(load_profiles())
+            return copy.deepcopy(item)
+        except Exception as exc:
+            item.update(status="cleanup-required", error=str(exc))
+            save_profiles(load_profiles())
+            try:
+                remove_failover(name)
+            except Exception as cleanup_error:
+                raise ValueError(f"创建失败：{exc}；部分服务器待清理，请删除该主备组重试：{cleanup_error}") from exc
+            raise
+
+
+def remove_failover(name):
+    with ENFORCEMENT_LOCK:
+        item = next((f for f in profile_record().get("failovers", []) if f["name"] == name), None)
+        if not item:
+            raise ValueError("主备组不存在")
+        CTX.failover_cleanup = True
+        try:
+            with LOCK:
+                doc = read_config()
+                doc["proxy-groups"] = [g for g in doc.get("proxy-groups", []) if g["name"] != name]
+                replace_references(doc, name, "REJECT")
+                write_config(doc, "detach-failover")
+            # Keep failed paths recorded, so remote cleanup can be retried.
+            for path in list(item["paths"]):
+                remove_server_chain(path)
+                with LOCK:
+                    item["paths"].remove(path)
+                    save_profiles(load_profiles())
+            with LOCK:
+                doc = read_config()
+                doc["proxy-groups"] = [g for g in doc.get("proxy-groups", []) if g["name"] != name]
+                replace_references(doc, name, "REJECT")
+                write_config(doc, "remove-failover")
+                profile_record()["failovers"].remove(item)
+                save_profiles(load_profiles())
+        except Exception as exc:
+            item.update(status="cleanup-required", error=str(exc))
+            save_profiles(load_profiles())
+            raise
+        finally:
+            CTX.failover_cleanup = False
+
+
+def save_remote_server(payload):
+    with ENFORCEMENT_LOCK:
+        identity = str(payload.get("id", ""))
+        if identity:
+            bindings = [b for r in load_profiles()["profiles"] for b in r.get("remoteNodes", [])
+                        if b["serverId"] == identity and b.get("status") == "active"]
+            if bindings:
+                old = remote_manager().record(identity)
+                for key in ("host", "sshPort", "installType", "connectionMode", "domain"):
+                    if str(payload.get(key, old.get(key, "3x-ui" if key == "installType" else ""))) != str(old.get(key, "3x-ui" if key == "installType" else "")):
+                        raise ValueError("服务器仍有订阅专属入站，不能变更地址、内核类型或接入模式")
+                if payload.get("coreConfig") or payload.get("clearCoreConfig"):
+                    raise ValueError("已有订阅专属入站，请通过节点管理修改，避免覆盖计量关联")
+        return remote_manager().save(payload)
 
 
 def subscription_userinfo(record):
@@ -526,6 +990,16 @@ def valid_profile_slug(value):
     return value
 
 
+def profile_locked(function):
+    from functools import wraps
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with LOCK:
+            return function(*args, **kwargs)
+    return wrapped
+
+
+@profile_locked
 def create_profile(payload):
     data = load_profiles()
     profile_id = unique_profile_id(data)
@@ -540,6 +1014,8 @@ def create_profile(payload):
     if template_id == "blank":
         doc = empty_profile_config()
     else:
+        if any(b.get("status") == "active" for b in profile_record(template_id).get("remoteNodes", [])):
+            raise ValueError("该模板拥有服务器专属节点，不能复制凭证供其他订阅共用；请创建空白订阅并创建新专属节点")
         doc = copy.deepcopy(get_cached_config(current_files(template_id)[0])[0])
     path = PROFILES_DIR / f"{profile_id}.yaml"
     validate_config(doc)
@@ -548,18 +1024,19 @@ def create_profile(payload):
     os.chmod(path, 0o600)
     stat = path.stat()
     with CONFIG_CACHE_LOCK:
-        CONFIG_CACHE[str(path.resolve())] = {
+        cache_config_entry(str(path.resolve()), {
             "mtime_ns": stat.st_mtime_ns,
             "size": stat.st_size,
             "doc": copy.deepcopy(doc),
             "text": text,
-        }
+        })
     data["profiles"].append({"id": profile_id, "name": name, "protected": False,
                              "slug": slug, "customSlug": custom_slug, "files": [str(path)]})
     save_profiles(data)
     return public_profile(data["profiles"][-1])
 
 
+@profile_locked
 def update_profile(payload):
     data = load_profiles()
     old_id = str(payload.get("oldId", ""))
@@ -585,7 +1062,10 @@ def update_profile(payload):
     return public_profile(record)
 
 
+@profile_locked
 def delete_profile(profile_id):
+    if any(b.get("status") == "active" for b in profile_record(profile_id).get("remoteNodes", [])):
+        raise ValueError("订阅仍拥有服务器节点，请先删除专属入站，不能丢弃限制关联")
     data = load_profiles()
     record = next((x for x in data["profiles"] if x["id"] == profile_id), None)
     if not record:
@@ -816,6 +1296,14 @@ def get_front_html():
         return FRONT.read_bytes()
 
 
+def cache_config_entry(key, entry):
+    """Called with CONFIG_CACHE_LOCK held; bound parsed configs and derived views."""
+    CONFIG_CACHE.pop(key, None)
+    CONFIG_CACHE[key] = entry
+    while len(CONFIG_CACHE) > 8:
+        CONFIG_CACHE.pop(next(iter(CONFIG_CACHE)))
+
+
 def get_cached_config(path):
     p = Path(path)
     stat = p.stat()
@@ -823,6 +1311,8 @@ def get_cached_config(path):
     with CONFIG_CACHE_LOCK:
         entry = CONFIG_CACHE.get(key)
         if entry and entry["mtime_ns"] == stat.st_mtime_ns and entry["size"] == stat.st_size:
+            CONFIG_CACHE.pop(key)
+            CONFIG_CACHE[key] = entry
             return entry["doc"], entry["text"]
 
     text = p.read_text(encoding="utf-8")
@@ -831,12 +1321,12 @@ def get_cached_config(path):
         raise ValueError("配置文件不是有效的 YAML 对象")
 
     with CONFIG_CACHE_LOCK:
-        CONFIG_CACHE[key] = {
+        cache_config_entry(key, {
             "mtime_ns": stat.st_mtime_ns,
             "size": stat.st_size,
             "doc": doc,
             "text": text,
-        }
+        })
     return doc, text
 
 
@@ -862,6 +1352,8 @@ def validate_config(doc):
         raise ValueError("节点名称不能重复")
     if len(group_names) != len(set(group_names)):
         raise ValueError("策略组名称不能重复")
+    if set(node_names) & (set(group_names) | BUILTINS):
+        raise ValueError("节点、策略组和内置策略不能使用相同名称")
     known = set(node_names) | set(group_names) | BUILTINS
     for group in groups:
         for ref in group.get("proxies", []) or []:
@@ -875,9 +1367,23 @@ def validate_config(doc):
             raise ValueError(f"链式节点 {node.get('name', '?')} 引用了不存在的前置中转：{dialer}")
 
 
-def write_config(doc, reason="manual"):
+def write_config(doc, reason="manual", unchanged_base=None):
     validate_config(doc)
-    text = yaml_dump(doc)
+    fragments = None
+    if unchanged_base is not None:
+        # Only the node editor uses immutable, copy-on-write documents.
+        key = str(current_files()[0].resolve())
+        with CONFIG_CACHE_LOCK:
+            previous = CONFIG_CACHE.get(key, {}).get("fragments", {})
+        fragments = {}
+        for key, value in doc.items():
+            if key in previous and key in unchanged_base and value is unchanged_base[key]:
+                fragments[key] = previous[key]
+            else:
+                fragments[key] = yaml_dump({key: value})
+        text = "".join(fragments.values())
+    else:
+        text = yaml_dump(doc)
     profile_id = profile_record()["id"]
     files = current_files()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -897,12 +1403,13 @@ def write_config(doc, reason="manual"):
                 stat = path.stat()
                 key = str(path.resolve())
                 with CONFIG_CACHE_LOCK:
-                    CONFIG_CACHE[key] = {
+                    cache_config_entry(key, {
                         "mtime_ns": stat.st_mtime_ns,
                         "size": stat.st_size,
-                        "doc": copy.deepcopy(doc),
+                        "doc": doc if unchanged_base is not None else copy.deepcopy(doc),
                         "text": text,
-                    }
+                        "fragments": fragments or {},
+                    })
             finally:
                 if os.path.exists(temp_name):
                     try:
@@ -1241,7 +1748,8 @@ def parse_node_link(link):
 def eligible_group_names(doc):
     return [group.get("name") for group in doc.get("proxy-groups", [])
             if isinstance(group, dict) and group.get("name")
-            and group.get("name") not in NON_NODE_GROUPS]
+            and group.get("name") not in NON_NODE_GROUPS
+            and group.get("name") not in {f["name"] for f in profile_record().get("failovers", [])}]
 
 
 def set_node_groups(doc, name, selected_groups, old_name=None):
@@ -1258,6 +1766,14 @@ def set_node_groups(doc, name, selected_groups, old_name=None):
 
 
 def mutate_chain(method, payload):
+    protect_failover_component(str(payload.get("oldName", "")))
+    mode = payload.get("mode", "mihomo")
+    if mode == "server":
+        if method != "POST":
+            raise ValueError("服务器链路请新建，避免原有用户连接被修改")
+        return server_chain(payload)
+    if mode != "mihomo":
+        raise ValueError("链式代理模式无效")
     doc = read_config()
     nodes = doc.setdefault("proxies", [])
     name = str(payload.get("name", "")).strip()
@@ -1597,12 +2113,63 @@ def exported_node_link(name):
     }
 
 
+def client_configuration_export(profile_id, format_id):
+    from client_adapter import managed_failovers, shadowrocket_config, shadowrocket_name, usage_label, xray_failover
+    record = profile_record(profile_id)
+    doc, _ = get_cached_config(current_files(profile_id)[0])
+    groups, skipped = managed_failovers(doc, record)
+    kind = CONVERSION_FORMATS[format_id]["kind"]
+    label = usage_label(traffic_info(record))
+    if kind == "xray-ha":
+        configs = []
+        for item, nodes in groups:
+            try:
+                configs.append(xray_failover(item["name"], nodes, item["interval"], label))
+            except (ValueError, KeyError, TypeError) as exc:
+                skipped.append({"name": item["name"], "type": "fallback", "reason": str(exc)})
+        if not configs:
+            raise ValueError("没有可导出的 Xray 主备组，请先创建有效的服务器多入口主备组并检查路径兼容性" + ("：" + "；".join(f"{x['name']}：{x['reason']}" for x in skipped) if skipped else ""))
+        return json.dumps(configs, ensure_ascii=False, indent=2).encode(), skipped, len(configs)
+    compatible = []
+    for item, nodes in groups:
+        try:
+            for node in nodes:
+                node_to_uri(node)
+            compatible.append((item, nodes))
+        except (ValueError, KeyError, TypeError) as exc:
+            skipped.append({"name": item["name"], "type": "fallback", "reason": str(exc)})
+    groups = compatible
+    if kind == "shadowrocket-config":
+        return shadowrocket_config(groups, label, scope=record_slug(record)), skipped, len(groups)
+    links, seen = [], set()
+    for _, nodes in groups:
+        for node in nodes:
+            if node["name"] not in seen:
+                seen.add(node["name"])
+                node["name"] = shadowrocket_name(node["name"], scope=record_slug(record))
+                links.append(node_to_uri(node))
+    if not links:
+        raise ValueError("请先创建有效的服务器多入口主备组，再导入小火箭主备节点订阅")
+    return base64.b64encode("\n".join(links).encode()), skipped, len(links)
+
+
 def conversion_report(profile_id=None):
     record = profile_record(profile_id)
     doc, _ = get_cached_config(current_files(profile_id)[0])
     nodes = doc.get("proxies", []) or []
     result = []
     for format_id, info in CONVERSION_FORMATS.items():
+        if info.get("kind"):
+            try:
+                _, skipped, count = client_configuration_export(profile_id, format_id)
+                error = ""
+            except ValueError as exc:
+                skipped, count, error = [], 0, str(exc)
+            result.append({"id": format_id, "name": info["name"], "note": info["note"],
+                           "supported": count, "unit": "主备组" if info["kind"] != "shadowrocket-nodes" else "节点",
+                           "available": bool(count), "error": error, "skipped": skipped,
+                           "url": f"/convert/{quote(record_slug(record), safe='')}/{format_id}"})
+            continue
         supported, skipped = [], []
         for node in nodes:
             reason = ""
@@ -1619,7 +2186,7 @@ def conversion_report(profile_id=None):
                 except Exception as error:
                     skipped.append({"name": node.get("name", "未知节点"), "type": node.get("type", ""), "reason": str(error)})
         result.append({"id": format_id, "name": info["name"], "note": info["note"],
-                       "supported": len(supported), "skipped": skipped,
+                       "supported": len(supported), "unit": "节点", "available": bool(supported), "skipped": skipped,
                        "url": f"/convert/{quote(record_slug(record), safe='')}/{format_id}"})
     return result
 
@@ -1627,15 +2194,23 @@ def conversion_report(profile_id=None):
 def converted_subscription(profile_id, format_id):
     if format_id not in CONVERSION_FORMATS:
         raise ValueError("不支持该转换格式")
+    if CONVERSION_FORMATS[format_id].get("kind"):
+        body, skipped, _ = client_configuration_export(profile_id, format_id)
+        return body, [item["name"] for item in skipped]
     doc, _ = get_cached_config(current_files(profile_id)[0])
     info = CONVERSION_FORMATS[format_id]
     links, skipped = [], []
+    from client_adapter import usage_label
+    label = usage_label(traffic_info(profile_record(profile_id))).replace("剩余 ", "可用 ").replace("到期 ", "有效至 ") if format_id == "v2rayn" else ""
     for node in doc.get("proxies", []) or []:
         if node.get("dialer-proxy") or str(node.get("type", "")).lower() not in info["types"]:
             skipped.append(str(node.get("name", "未知节点")))
             continue
         try:
-            links.append(node_to_uri(node))
+            exported = node
+            if label and not links:
+                exported = {**node, "name": f"[{label}] {node['name']}"}
+            links.append(node_to_uri(exported))
         except Exception:
             skipped.append(str(node.get("name", "未知节点")))
     if not links:
@@ -1662,28 +2237,57 @@ def subscription_qr_svg(url):
     return svg
 
 
+def snapshot_view():
+    record = profile_record()
+    files = [Path(x) for x in record.get("files", [])]
+    doc, _ = get_cached_config(files[0])
+    key = str(files[0].resolve())
+    with CONFIG_CACHE_LOCK:
+        entry = CONFIG_CACHE.get(key)
+        # write_config replaces the complete entry, invalidating all derived views.
+        if entry and entry.get("doc") is doc and entry.get("view") is not None:
+            return entry["view"]
+        proxies = []
+        for index, node in enumerate(doc.get("proxies", [])):
+            proxies.append({"index": index, "name": node.get("name", ""), "type": node.get("type", ""),
+                            "server": node.get("server", ""), "port": node.get("port", ""), "config": node})
+        groups = []
+        for index, group in enumerate(doc.get("proxy-groups", [])):
+            groups.append({"index": index, "name": group.get("name", ""), "type": group.get("type", ""),
+                           "count": len(group.get("proxies", []) or []), "config": group})
+        rules = []
+        for index, raw in enumerate(doc.get("rules", [])):
+            row = rule_parts(raw)
+            row["index"] = index
+            rules.append(row)
+        policy = doc.get("dns", {}).get("nameserver-policy", {}) or {}
+        dns_policies = [{"domain": key, "servers": value if isinstance(value, list) else [value]}
+                        for key, value in policy.items()]
+        base = {"nodes": proxies, "groups": groups, "rules": rules, "dnsPolicies": dns_policies,
+                "updated": datetime.fromtimestamp(files[0].stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")}
+        view = {"data": base, "prefix": json.dumps(base, ensure_ascii=False).encode("utf-8")[:-1],
+                "profileWire": None, "compressed": None}
+        if entry and entry.get("doc") is doc:
+            entry["view"] = view
+        return view
+
+
 def snapshot():
-    doc = read_config(copy_doc=False)
-    files = current_files()
-    proxies = []
-    for index, node in enumerate(doc.get("proxies", [])):
-        proxies.append({"index": index, "name": node.get("name", ""), "type": node.get("type", ""),
-                        "server": node.get("server", ""), "port": node.get("port", ""), "config": node})
-    groups = []
-    for index, group in enumerate(doc.get("proxy-groups", [])):
-        groups.append({"index": index, "name": group.get("name", ""), "type": group.get("type", ""),
-                       "count": len(group.get("proxies", []) or []), "config": group})
-    rules = []
-    for index, raw in enumerate(doc.get("rules", [])):
-        row = rule_parts(raw)
-        row["index"] = index
-        rules.append(row)
-    policy = doc.get("dns", {}).get("nameserver-policy", {}) or {}
-    dns_policies = [{"domain": key, "servers": value if isinstance(value, list) else [value]}
-                    for key, value in policy.items()]
-    return {"nodes": proxies, "groups": groups, "rules": rules, "dnsPolicies": dns_policies,
-            "updated": datetime.fromtimestamp(files[0].stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-            "profile": public_profile(profile_record())}
+    return {**snapshot_view()["data"], "profile": public_profile(profile_record())}
+
+
+def snapshot_json(compressed=False):
+    view = snapshot_view()
+    profile = json.dumps(public_profile(profile_record()), ensure_ascii=False).encode("utf-8")
+    if compressed:
+        with CONFIG_CACHE_LOCK:
+            if view["profileWire"] == profile and view["compressed"] is not None:
+                return view["compressed"]
+            body = view["prefix"] + b', "profile": ' + profile + b'}'
+            wire = gzip.compress(body, compresslevel=1, mtime=0)
+            view.update(profileWire=profile, compressed=wire)
+            return wire
+    return view["prefix"] + b', "profile": ' + profile + b'}'
 
 
 def replace_references(doc, old, new=None):
@@ -1772,14 +2376,15 @@ def country_for_server(server):
     return code, address
 
 
-def add_country_flags(payload):
+def add_country_flags(payload, protected_names=()):
     doc = read_config()
     nodes = doc.setdefault("proxies", [])
     requested = payload.get("names") or []
     if not isinstance(requested, list):
         raise ValueError("节点选择格式不正确")
     selected = {str(name) for name in requested if str(name).strip()}
-    targets = [node for node in nodes if not selected or node.get("name") in selected]
+    targets = [node for node in nodes if (not selected or node.get("name") in selected)
+               and node.get("name") not in protected_names]
     if not targets:
         raise ValueError("没有可处理的节点")
 
@@ -1854,13 +2459,100 @@ def delete_nodes_from_doc(doc, names):
 
 
 def bulk_delete_nodes(payload):
+    for name in payload.get("names", []):
+        protect_failover_component(name)
     doc = read_config()
     deleted = delete_nodes_from_doc(doc, payload.get("names"))
     write_config(doc, "node-bulk-delete")
     return {"deleted": len(deleted), "names": deleted}
 
 
+def validate_node_config(config):
+    from remote_manager import valid_port, valid_domain
+    if not isinstance(config, dict):
+        raise ValueError("节点配置必须是 JSON 对象")
+    node = copy.deepcopy(config)
+    kind = str(node.get("type", "")).lower()
+    if kind == "https":
+        kind, node["tls"] = "http", True
+    if kind not in SUPPORTED_NODE_TYPES:
+        raise ValueError("暂不支持该节点协议")
+    node["type"], node["port"] = kind, valid_port(node.get("port"))
+    name = str(node.get("name") or "").strip()
+    if not name or len(name) > 200 or any(c in name for c in "\r\n\0"):
+        raise ValueError("节点名称须为 1–200 字符且不能含换行")
+    node["name"] = name
+    host = str(node.get("server") or "").strip().strip("[]")
+    try:
+        host = str(ipaddress.ip_address(host))
+    except ValueError:
+        host = valid_domain(host)
+        if not host:
+            raise ValueError("请填写服务器 IP 或完整域名")
+    node["server"] = host
+    if kind in ("vless", "vmess", "tuic"):
+        try:
+            node["uuid"] = str(uuid.UUID(str(node.get("uuid", ""))))
+        except ValueError as exc:
+            raise ValueError("UUID 格式无效，请使用完整的 UUID") from exc
+    if kind in ("ss", "trojan", "hysteria2", "tuic") and not str(node.get("password") or ""):
+        raise ValueError("该协议必须填写密码")
+    if kind == "ss":
+        cipher = str(node.get("cipher") or "")
+        if not cipher:
+            raise ValueError("Shadowsocks 必须选择加密方式")
+        if cipher.startswith("2022-blake3-"):
+            length = 16 if cipher == "2022-blake3-aes-128-gcm" else 32
+            try:
+                keys = str(node["password"]).split(":")
+                if any(len(base64.b64decode(key, validate=True)) != length for key in keys):
+                    raise ValueError("invalid key length")
+            except ValueError as exc:
+                raise ValueError(f"该 Shadowsocks 2022 加密方式要求 {length} 字节的 Base64 密钥") from exc
+    normalize_reality_options(node)
+    reality = node.get("reality-opts") or {}
+    if reality:
+        if kind != "vless" or not node.get("tls"):
+            raise ValueError("Reality 需要 VLESS 协议并启用 TLS")
+        key = str(reality.get("public-key") or "")
+        try:
+            decoded = base64.b64decode(key + "="*(-len(key) % 4), altchars=b'-_', validate=True)
+        except ValueError as exc:
+            raise ValueError("Reality 公钥必须为 32 字节的 Base64URL") from exc
+        if len(decoded) != 32:
+            raise ValueError("Reality 公钥必须为 32 字节的 Base64URL")
+        sid = str(reality.get("short-id", ""))
+        if not re.fullmatch(r"(?:[0-9a-fA-F]{2}){0,8}", sid):
+            raise ValueError("Reality Short ID 必须为至多 16 位、偶数长度的十六进制字符串")
+    if node.get("flow") == "xtls-rprx-vision" and (kind != "vless" or not node.get("tls") or node.get("network", "tcp") != "tcp"):
+        raise ValueError("Vision 流控要求 VLESS、TLS / Reality 和 TCP 传输")
+    if node.get("dialer-proxy") == name:
+        raise ValueError("节点不能以前置中转引用自身")
+    return node
+
+
+@profile_locked
 def mutate_node(method, payload):
+    old_name = str(payload.get("oldName", ""))
+    protect_failover_component(old_name if method == "PUT" else str(payload.get("name", "")))
+    if method == "PUT":
+        config = validate_node_config(payload.get("config"))
+        if config.get("type") == "https":
+            config.update(type="http", tls=True)
+        if config.get("type") == "http":
+            config["udp"] = False
+        base = read_config(copy_doc=False)
+        index = next((i for i, n in enumerate(base.get("proxies", [])) if n.get("name") == old_name), -1)
+        if index < 0:
+            raise ValueError("原节点不存在")
+        if config.get("name") == old_name:
+            if config == base["proxies"][index]:
+                return {"unchanged": True}
+            doc = dict(base)
+            doc["proxies"] = list(base["proxies"])
+            doc["proxies"][index] = config
+            write_config(doc, "node", unchanged_base=base)
+            return {"unchanged": False}
     doc = read_config()
     nodes = doc.setdefault("proxies", [])
     old_name = str(payload.get("oldName", ""))
@@ -1871,8 +2563,7 @@ def mutate_node(method, payload):
         config = payload.get("config")
         if not isinstance(config, dict):
             raise ValueError("节点配置必须是 JSON 对象")
-        config = dict(config)
-        normalize_reality_options(config)
+        config = validate_node_config(config)
         node_type = str(config.get("type", "")).lower()
         if node_type == "https":
             node_type = "http"
@@ -1933,9 +2624,11 @@ def reorder_nodes(nodes, payload):
     return True
 
 
-def sync_group_node_order(doc):
+def sync_group_node_order(doc, excluded_groups=()):
     order = {node.get("name"): index for index, node in enumerate(doc.get("proxies", []))}
     for group in doc.get("proxy-groups", []):
+        if group.get("name") in excluded_groups:
+            continue
         refs = group.get("proxies")
         if not isinstance(refs, list):
             continue
@@ -1949,11 +2642,12 @@ def move_node(payload):
     doc = read_config()
     nodes = doc.setdefault("proxies", [])
     if reorder_nodes(nodes, payload):
-        sync_group_node_order(doc)
+        sync_group_node_order(doc, {f["name"] for f in profile_record().get("failovers", [])})
         write_config(doc, "node-order")
 
 
 def mutate_group(method, payload):
+    protect_failover_component(str(payload.get("oldName") or payload.get("name") or payload.get("config", {}).get("name", "")))
     doc = read_config()
     groups = doc.setdefault("proxy-groups", [])
     old_name = str(payload.get("oldName", ""))
@@ -2112,7 +2806,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
     def json_out(self, value, status=200, headers=None):
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        return self.json_bytes(json.dumps(value, ensure_ascii=False).encode("utf-8"), status, headers)
+
+    def json_bytes(self, body, status=200, headers=None):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -2122,7 +2818,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def svg_out(self, body):
         self.send_response(200)
@@ -2160,6 +2857,8 @@ class Handler(BaseHTTPRequestHandler):
     def subscription(self, profile_id):
         try:
             record = profile_record(profile_id)
+            if subscription_blocked(record):
+                return self.json_out({"error": "订阅已过期或流量已用尽，服务器节点正在撤销"}, 403)
             _, text = get_cached_config(current_files(profile_id)[0])
             body = text.encode("utf-8")
             filename = quote(record.get("name", profile_id) + ".yaml")
@@ -2180,10 +2879,13 @@ class Handler(BaseHTTPRequestHandler):
     def converted(self, profile_id, format_id):
         try:
             record = profile_record(profile_id)
+            if subscription_blocked(record):
+                return self.json_out({"error": "订阅已过期或流量已用尽，服务器节点正在撤销"}, 403)
             body, skipped = converted_subscription(profile_id, format_id)
-            filename = quote(record.get("name", profile_id) + "-" + format_id + ".txt")
+            info = CONVERSION_FORMATS[format_id]
+            filename = quote(record.get("name", profile_id) + "-" + format_id + info.get("extension", ".txt"))
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", info.get("contentType", "text/plain; charset=utf-8"))
             self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + filename)
             self.subscription_headers(record)
             self.send_header("X-Mxioc-Skipped-Nodes", str(len(skipped)))
@@ -2241,6 +2943,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/admin/api/servers":
                 return self.json_out({"servers": remote_manager().list()})
+            if path == "/admin/api/servers/metrics":
+                query = parse_qs(urlparse(self.path).query)
+                return self.json_out(host_metrics((query.get("id") or [""])[0]))
             if path in ("/admin/api/servers/jobs", "/admin/api/servers/inbounds"):
                 query = parse_qs(urlparse(self.path).query)
                 identity = (query.get("id") or [""])[0]
@@ -2257,7 +2962,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.select_profile()
             if path == "/admin/api/snapshot":
-                self.json_out(snapshot())
+                accepts_gzip = any(part.split(";", 1)[0].strip() == "gzip" and not re.search(r";\s*q=0(?:\.0*)?(?:\s|$)", part)
+                                   for part in self.headers.get("Accept-Encoding", "").split(","))
+                headers = {"Content-Encoding": "gzip", "Vary": "Accept-Encoding"} if accepts_gzip else {"Vary": "Accept-Encoding"}
+                self.json_bytes(snapshot_json(accepts_gzip), headers=headers)
             elif path == "/admin/api/nodes/share":
                 query = parse_qs(urlparse(self.path).query)
                 self.json_out(exported_node_link((query.get("name") or [""])[0]))
@@ -2265,6 +2973,10 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 node = exported_node_link((query.get("name") or [""])[0])
                 self.svg_out(subscription_qr_svg(node["uri"]))
+            elif path == "/admin/api/failovers":
+                self.json_out({"failovers": copy.deepcopy(profile_record().get("failovers", []))})
+            elif path == "/admin/api/server-chains":
+                self.json_out({"chains": copy.deepcopy(profile_record().get("serverChains", []))})
             elif path == "/admin/api/traffic":
                 self.json_out(traffic_info(profile_record()))
             elif path == "/admin/api/conversions":
@@ -2333,22 +3045,33 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/api/profiles":
                 return self.json_out({"ok": True, "profile": create_profile(data)})
             if path == "/admin/api/servers":
-                return self.json_out({"ok": True, "server": remote_manager().save(data)})
+                return self.json_out({"ok": True, "server": save_remote_server(data)})
             if path == "/admin/api/servers/probe":
                 return self.json_out(remote_manager().probe(data))
             if path == "/admin/api/servers/test":
                 return self.json_out(remote_manager().test(str(data.get("id", ""))))
             if path == "/admin/api/servers/attach":
                 return self.json_out(remote_manager().attach_existing(str(data.get("id", ""))))
+            if path == "/admin/api/servers/sni":
+                return self.json_out(remote_manager().test_sni(str(data.get("serverId", "")), data.get("candidates")))
+            if path == "/admin/api/servers/bind":
+                self.select_profile()
+                return self.json_out({"ok": True, "binding": bind_remote_node(str(data.get("serverId", "")), data.get("inboundId"))})
+            if path == "/admin/api/traffic/sync":
+                self.select_profile()
+                enforce_profile(profile_record()["id"])
+                return self.json_out({"ok": True, "traffic": traffic_info(profile_record())})
             if path == "/admin/api/servers/install":
                 return self.json_out({"ok": True, "job": remote_manager().start_install(str(data.get("id", "")), data.get("confirmed"))}, 202)
             if path == "/admin/api/servers/diagnose":
                 manager = remote_manager()
                 return self.json_out({"log": manager.diagnostics(copy.deepcopy(manager.record(str(data.get("id", "")))))})
             if path == "/admin/api/servers/inbounds":
-                return self.json_out({"ok": True, **remote_manager().create_inbound(str(data.get("serverId", "")), data)})
+                self.select_profile()
+                return self.json_out({"ok": True, **create_owned_remote(data)})
             if path == "/admin/api/servers/relay":
-                return self.json_out({"ok": True, **remote_manager().create_relay(str(data.get("serverId", "")), data)})
+                self.select_profile()
+                return self.json_out({"ok": True, **create_owned_remote(data, relay=True)})
             if path == "/admin/api/updates/check":
                 return self.json_out({"ok": True, **update_status(force=True)})
             if path == "/admin/api/updates/dismiss":
@@ -2370,10 +3093,19 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("当前用户名或密码错误")
                 return self.json_out({"ok": True, **start_uninstall(bool(data.get("purgeData")))}, status=202)
             self.select_profile()
+            if path == "/admin/api/nodes/validate":
+                config = validate_node_config(data.get("config"))
+                try:
+                    uri = node_to_uri(config) if not config.get("dialer-proxy") else None
+                except ValueError:
+                    uri = None
+                return self.json_out({"ok": True, "config": config, "uri": uri})
+            if path == "/admin/api/failovers":
+                return self.json_out({"ok": True, "failover": create_failover(data)})
             if path == "/admin/api/nodes": mutate_node("POST", data)
             elif path == "/admin/api/nodes/move": move_node(data)
             elif path == "/admin/api/nodes/flags":
-                return self.json_out({"ok": True, **add_country_flags(data)})
+                return self.json_out({"ok": True, **add_country_flags(data, {p for f in profile_record().get("failovers", []) for p in f.get("paths", [])})})
             elif path == "/admin/api/chains": mutate_chain("POST", data)
             elif path == "/admin/api/import-node":
                 return self.json_out({"ok": True, **import_node_links(data)})
@@ -2415,14 +3147,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin/api/profiles":
                 return self.json_out({"ok": True, "profile": update_profile(data)})
             if path == "/admin/api/servers":
-                return self.json_out({"ok": True, "server": remote_manager().save(data)})
+                return self.json_out({"ok": True, "server": save_remote_server(data)})
             if path == "/admin/api/servers/inbounds":
+                for record in load_profiles()["profiles"]:
+                    for binding in record.get("remoteNodes", []):
+                        if binding.get("status") == "active" and (binding["serverId"], binding["inboundId"]) == (str(data.get("serverId", "")), data.get("inboundId")):
+                            if binding.get("identityHash") and binding["identityHash"] != remote_node_identity(data.get("inbound") or {}):
+                                raise ValueError("专属入站的协议、端口或认证配置不能替换，请创建新入站以保持订阅归属")
                 remote_manager().update_inbound(str(data.get("serverId", "")), data.get("inboundId"), data.get("inbound"))
                 return self.json_out({"ok": True})
             self.select_profile()
             if path == "/admin/api/traffic":
                 return self.json_out({"ok": True, "traffic": update_traffic(data)})
-            if path == "/admin/api/nodes": mutate_node("PUT", data)
+            if path == "/admin/api/nodes":
+                return self.json_out({"ok": True, **(mutate_node("PUT", data) or {})})
             elif path == "/admin/api/chains": mutate_chain("PUT", data)
             elif path == "/admin/api/groups": mutate_group("PUT", data)
             elif path == "/admin/api/rules": mutate_rule("PUT", data)
@@ -2448,11 +3186,30 @@ class Handler(BaseHTTPRequestHandler):
                 delete_profile(str(data.get("id", "")))
                 return self.json_out({"ok": True})
             if path == "/admin/api/servers":
+                if any(b.get("status") == "active" and b["serverId"] == str(data.get("id", ""))
+                       for r in load_profiles()["profiles"] for b in r.get("remoteNodes", [])):
+                    raise ValueError("服务器仍有关联订阅节点，请先删除远端专属入站")
                 remote_manager().remove(str(data.get("id", "")))
                 return self.json_out({"ok": True})
             if path == "/admin/api/servers/inbounds":
-                return self.json_out({"ok": True, **remote_manager().delete_inbound(str(data.get("serverId", "")), data.get("inboundId"))})
+                with ENFORCEMENT_LOCK:
+                    server_id, identity = str(data.get("serverId", "")), int(data.get("inboundId"))
+                    result = remote_manager().delete_inbound(server_id, identity)
+                    with LOCK:
+                        for record in load_profiles()["profiles"]:
+                            for binding in record.get("remoteNodes", []):
+                                if (binding["serverId"], binding["inboundId"]) == (server_id, identity):
+                                    binding.update(status="revoked", revokedAt=int(time.time()))
+                        save_profiles(load_profiles())
+                    return self.json_out({"ok": True, **result})
             self.select_profile()
+            if path == "/admin/api/failovers":
+                remove_failover(str(data.get("name", "")))
+                return self.json_out({"ok": True})
+            if path == "/admin/api/server-chains":
+                protect_failover_component(str(data.get("name", "")))
+                remove_server_chain(str(data.get("name", "")))
+                return self.json_out({"ok": True})
             if path == "/admin/api/nodes": mutate_node("DELETE", data)
             elif path == "/admin/api/nodes/bulk":
                 return self.json_out({"ok": True, **bulk_delete_nodes(data)})
@@ -2495,4 +3252,5 @@ if __name__ == "__main__":
     load_profiles()
     load_auth()
     threading.Thread(target=update_checker_loop, daemon=True).start()
+    threading.Thread(target=enforcement_loop, daemon=True).start()
     LimitedThreadingHTTPServer(("127.0.0.1", 62577), Handler).serve_forever()

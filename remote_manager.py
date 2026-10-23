@@ -1,4 +1,4 @@
-"""SSH provisioning and authenticated 3x-ui control. No browser-held SSH secrets."""
+"""Pinned-SSH provisioning, panel APIs and standalone core control."""
 
 import base64
 import copy
@@ -92,7 +92,101 @@ def installation_error(log, stage, code):
     return f"安装在 {stage} 阶段失败（退出码 {code}）" + ("：" + detail if detail else "，请查看安装日志")
 
 
+PANEL_TYPES = {"3x-ui", "x-ui", "x-panel"}
+INSTALL_TYPES = PANEL_TYPES | {"xray", "sing-box"}
+
+
+def install_type(record):
+    value = record.get("installType", "3x-ui")
+    if not isinstance(value, str) or value not in INSTALL_TYPES:
+        raise ValueError("不支持的安装类型，请选择支持的面板或内核")
+    return value
+
+
+def core_install_script(record):
+    kind = install_type(record)
+    xray = kind == "xray"
+    service = "xray" if xray else "sing-box"
+    config = "/usr/local/etc/xray/config.json" if xray else "/etc/sing-box/config.json"
+    binary = "/usr/local/bin/xray" if xray else "/usr/bin/sing-box"
+    check = f"{binary} run -test -config" if xray else f"{binary} check -c"
+    url = ("https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh" if xray
+           else "https://sing-box.app/install.sh")
+    argument = "install" if xray else ""
+    encoded = base64.b64encode(record.get("coreConfig", "").encode()).decode()
+    # Only the validated enum and base64 data enter the script. Never print configuration.
+    return f"""set -Eeuo pipefail
+stage=preflight
+printf 'MXIOC_STAGE=preflight\\n'
+trap 'rc=$?; printf "MXIOC_FAILURE_STAGE=%s EXIT=%s\\n" "$stage" "$rc"; exit "$rc"' ERR
+test "$(id -u)" = 0
+command -v systemctl >/dev/null || {{ echo 'Standalone cores require systemd'; exit 12; }}
+if ! command -v curl >/dev/null || ! command -v flock >/dev/null; then
+  if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl util-linux
+  elif command -v dnf >/dev/null; then dnf install -y curl util-linux
+  elif command -v yum >/dev/null; then yum install -y curl util-linux
+  else echo 'Missing curl/flock or unsupported package manager'; exit 12; fi
+fi
+mkdir -p /var/lock
+exec 9>/var/lock/mxioc-xui-install.lock
+flock -n 9 || {{ echo 'Another MXIOC installation is running'; exit 75; }}
+workdir=$(mktemp -d /tmp/mxioc-core.XXXXXXXX)
+installer="$workdir/install.sh"
+backup=$(mktemp /tmp/mxioc-config.XXXXXXXX)
+candidate=''
+had_config=0
+applied=0
+cleanup() {{
+  rc=$?
+  if [ "$rc" != 0 ] && [ "$applied" = 1 ]; then
+    if [ "$had_config" = 1 ]; then cp -p "$backup" {config}; else rm -f {config}; fi
+    systemctl restart {service} >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$workdir"
+  rm -f "$backup"
+  [ -z "$candidate" ] || rm -f "$candidate"
+}}
+trap cleanup EXIT
+if [ -f {config} ]; then cp -p {config} "$backup"; had_config=1; fi
+stage=download
+printf 'MXIOC_STAGE=download\\n'
+curl -fLsS --retry 2 --connect-timeout 20 --max-time 180 {shlex.quote(url)} -o "$installer"
+test -s "$installer"
+stage=install
+printf 'MXIOC_STAGE=install\\n'
+applied=1
+(cd "$workdir" && bash -e "$installer" {argument} </dev/null)
+if [ "$had_config" = 1 ]; then cp -p "$backup" {config}; fi
+stage=config
+printf 'MXIOC_STAGE=config\\n'
+if [ -n '{encoded}' ]; then
+  mkdir -p $(dirname {config})
+  candidate=$(mktemp {config}.mxioc.XXXXXXXX)
+  printf '%s' '{encoded}' | base64 -d > "$candidate"
+  chmod 600 "$candidate"
+  {check} "$candidate" >/dev/null 2>&1 || {{ echo 'Core configuration validation failed; configuration was not applied'; exit 22; }}
+  applied=1
+  if [ "$had_config" = 1 ]; then cp -p "$backup" {config}.mxioc-backup; fi
+  # Preserve permissions needed by the vendor service user.
+  if [ -f {config} ]; then chown --reference={config} "$candidate"; chmod --reference={config} "$candidate"; else chmod 644 "$candidate"; fi
+  mv "$candidate" {config}
+  candidate=''
+fi
+{check} {config} >/dev/null 2>&1 || {{ echo 'Core configuration validation failed'; exit 22; }}
+stage=service
+printf 'MXIOC_STAGE=service\\n'
+systemctl enable {service}
+systemctl restart {service}
+sleep 2
+systemctl is-active --quiet {service}
+{binary} version
+printf 'MXIOC_STAGE=installed\\n'
+"""
+
+
 def install_script(record, password):
+    if install_type(record) not in PANEL_TYPES:
+        return core_install_script(record)
     env = "XUI_DOMAIN=" + shlex.quote(record["domain"]) if record["domain"] else "XUI_AUTO=1"
     return f"""set -Eeuo pipefail
 stage=preflight
@@ -139,8 +233,9 @@ printf 'MXIOC_STAGE=installed\\n'
 
 
 def parse_panel_settings(output, record):
-    port = re.search(r"(?m)^port:[ \t]*(\d+)[ \t]*$", output)
-    path = re.search(r"(?m)^webBasePath:[ \t]*(\S+)[ \t]*$", output)
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    port = re.search(r"(?m)^port(?:（[^\n]*?）)?:[ \t]*(\d+)[ \t]*$", output)
+    path = re.search(r"(?m)^webBasePath(?:（[^\n]*?）)?:[ \t]*(\S+)[ \t]*$", output)
     if not port or not path:
         raise ValueError("无法读取 3x-ui 面板端口或访问路径，请查看诊断日志")
     port = valid_port(port.group(1))
@@ -164,6 +259,8 @@ class PanelAPI:
         self.cookies, self.csrf = {}, ""
         self.password, self.logged_in = password, False
         self.legacy_csrf = False
+        self.api_prefix = "panel/api"
+        self.web_prefix = "panel"
 
     def request(self, path, payload=None, *, method=None, bearer=True):
         # Xray configuration routes are session-only, unlike /panel/api.
@@ -225,8 +322,13 @@ class PanelAPI:
                                   else str(value).lower() if isinstance(value, bool) else value
                                   for key, value in payload.items()}).encode()
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
+            remote_path = path.lstrip("/")
+            if remote_path.startswith("panel/api/"):
+                remote_path = self.api_prefix + remote_path[len("panel/api"):]
+            elif remote_path.startswith("panel/xray/"):
+                remote_path = self.web_prefix + remote_path[len("panel"):]
             connection.request(method or ("POST" if payload is not None else "GET"),
-                               self.record["panelPath"].rstrip("/") + "/" + path.lstrip("/"), body, headers)
+                               self.record["panelPath"].rstrip("/") + "/" + remote_path, body, headers)
             response = connection.getresponse()
             for header in response.headers.get_all("Set-Cookie", []):
                 cookie = SimpleCookie()
@@ -239,6 +341,9 @@ class PanelAPI:
                 if response.status == 404 and path == "csrf-token" and self.record.get("connectionMode") == "existing":
                     self.legacy_csrf = True
                     return None
+                if response.status == 404 and path == "panel/api/inbounds/list" and install_type(self.record) == "x-ui" and self.api_prefix == "panel/api":
+                    self.api_prefix, self.web_prefix = "xui/API", "xui"
+                    return self.request(path, payload, method=method, bearer=False)
                 raise ValueError(f"3x-ui 接口 HTTP {response.status}，请检查面板状态、访问路径和 API 令牌")
             try:
                 result = json.loads(raw)
@@ -314,11 +419,14 @@ class RemoteManager:
         keys = ("id", "name", "host", "sshPort", "sshUser", "fingerprint", "domain", "panelUser",
                 "panelUrl", "panelPort", "panelPath", "panelTLS", "createdAt", "lastError", "connectionMode", "existingVerifiedAt")
         result = {key: record.get(key) for key in keys}
-        jobs = [x for x in self.data["jobs"] if x["serverId"] == record["id"]]
+        result["installType"] = install_type(record)
+        result["hasCoreConfig"] = bool(record.get("coreConfig"))
+        jobs = [x for x in self.data["jobs"] if x["serverId"] == record["id"]
+                and x.get("installType", "3x-ui") == install_type(record)]
         if jobs:
             result["job"] = {k: jobs[-1].get(k) for k in ("id", "status", "stage", "error", "startedAt", "finishedAt")}
         result["hasSSHPassword"] = bool(record.get("sshPassword"))
-        result["hasPanelPassword"] = bool(record.get("panelPassword"))
+        result["hasPanelPassword"] = install_type(record) in PANEL_TYPES and bool(record.get("panelPassword"))
         return result
 
     def list(self):
@@ -336,12 +444,38 @@ class RemoteManager:
             record["connectionMode"] = payload.get("connectionMode", record.get("connectionMode", "install"))
             if record["connectionMode"] not in ("install", "existing"):
                 raise ValueError("服务器接入模式无效")
+            previous_type = install_type(record)
+            record["installType"] = payload.get("installType", previous_type)
+            kind = install_type(record)
+            if kind in ("x-ui", "x-panel") and record["connectionMode"] != "existing":
+                raise ValueError("X-ui / X-Panel 请使用接入现有面板模式，不运行交互式第三方安装器")
+            if record["connectionMode"] == "existing" and kind not in PANEL_TYPES:
+                raise ValueError("现有面板接入仅支持 X-ui / 3x-ui")
+            if kind != previous_type:
+                for key in ("panelUrl", "panelPort", "panelPath", "panelTLS", "managed", "lastXrayBackup", "coreConfig", "coreState", "meters", "relays"):
+                    record.pop(key, None)
+            if kind not in PANEL_TYPES:
+                if payload.get("domain"):
+                    raise ValueError("独立内核的域名和 TLS 请在内核 JSON 配置中设置")
+                raw = payload.get("coreConfig", "")
+                if not isinstance(raw, str) or len(raw.encode()) > 128 * 1024:
+                    raise ValueError("内核配置必须是 128 KB 以内的 JSON")
+                if raw.strip():
+                    try:
+                        config = json.loads(raw)
+                    except ValueError as exc:
+                        raise ValueError("内核配置不是有效 JSON") from exc
+                    if not isinstance(config, dict) or not isinstance(config.get("inbounds"), list) or not isinstance(config.get("outbounds"), list):
+                        raise ValueError("内核配置需包含 inbounds 和 outbounds 数组")
+                    record["coreConfig"] = self.seal(raw)
+                elif payload.get("clearCoreConfig") is True:
+                    record.pop("coreConfig", None)
             record.pop("existingVerifiedAt", None)
             for key, value in {"host": valid_ip(payload.get("host")), "sshPort": valid_port(payload.get("sshPort", 22)),
                                "name": text(payload.get("name"), "服务器名称", maximum=80),
                                "sshUser": text(payload.get("sshUser"), "SSH 用户名", maximum=64),
                                "domain": valid_domain(payload.get("domain")),
-                               "panelUser": text(payload.get("panelUser"), "面板用户名", 1 if record["connectionMode"] == "existing" else 3, 64)}.items():
+                               "panelUser": text(payload.get("panelUser") if kind in PANEL_TYPES else "unused", "面板用户名", 1 if record["connectionMode"] == "existing" else 3, 64)}.items():
                 record[key] = value
             pin = str(payload.get("fingerprint", ""))
             if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", pin):
@@ -354,6 +488,9 @@ class RemoteManager:
                    for item in self.data["servers"]):
                 raise ValueError("该 IP 与 SSH 端口已登记，请编辑现有服务器")
             for key, label, minimum in (("sshPassword", "SSH 密码", 1), ("panelPassword", "面板密码", 12)):
+                if key == "panelPassword" and kind not in PANEL_TYPES:
+                    record[key] = self.seal("")
+                    continue
                 if key == "panelPassword" and record["connectionMode"] == "existing":
                     minimum = 1
                 if payload.get(key):
@@ -413,7 +550,7 @@ class RemoteManager:
             ssh.close()
             raise
 
-    def execute(self, ssh, record, script, *, timeout=60, on_line=None):
+    def execute(self, ssh, record, script, *, timeout=60, on_line=None, max_output=MAX_LOG * 2):
         sudo = record["sshUser"] != "root"
         stdin, stdout, _ = ssh.exec_command("sudo -S -p '' bash -s" if sudo else "bash -s", timeout=20)
         channel = stdout.channel
@@ -433,8 +570,10 @@ class RemoteManager:
                 if channel.recv_ready():
                     chunk = channel.recv(8192)
                     output.extend(chunk)
-                    if len(output) > MAX_LOG * 2:
-                        del output[:-MAX_LOG * 2]
+                    if len(output) > max_output:
+                        if max_output != MAX_LOG * 2:
+                            raise ValueError("远端配置超过支持的读取大小")
+                        del output[:-max_output]
                     pending += chunk
                     while b"\n" in pending:
                         line, pending = pending.split(b"\n", 1)
@@ -461,19 +600,23 @@ class RemoteManager:
         own = ssh is None
         ssh = ssh or self.connect(record)
         try:
+            service = "x-ui" if install_type(record) in PANEL_TYPES else install_type(record)
             _, output = self.execute(ssh, record, """set +e
 echo '=== Service ==='
 if command -v systemctl >/dev/null; then systemctl status x-ui --no-pager -l; journalctl -u x-ui -n 45 --no-pager; else rc-service x-ui status; fi
 echo '=== Listeners ==='
 ss -lntup 2>/dev/null | head -35
 echo '=== DNS ==='
-""" + ("getent ahosts " + shlex.quote(record["domain"]) if record.get("domain") else "true"), timeout=40)
+""".replace("x-ui", service) + ("getent ahosts " + shlex.quote(record["domain"]) if record.get("domain") else "true"), timeout=40)
             return clean_log(output, [self.secret(record, "sshPassword"), self.secret(record, "panelPassword")])[-MAX_LOG:]
         finally:
             if own:
                 ssh.close()
 
     def panel(self, ssh, record):
+        if install_type(record) not in PANEL_TYPES:
+            from core_adapter import CoreAPI
+            return CoreAPI(self, ssh, record)
         code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -show true && { ./x-ui setting -getCert true 2>/dev/null || true; }", timeout=30)
         if code:
             raise ValueError("未能读取 /usr/local/x-ui 面板设置，请检查安装位置、版本兼容性及 SSH 提权权限")
@@ -486,7 +629,10 @@ echo '=== DNS ==='
         token = re.search(r"(?m)^apiToken:[ \t]*(\S+)", output)
         if (code or not token) and record.get("connectionMode") != "existing":
             raise ValueError("无法读取 3x-ui API 令牌，请确认使用指定的 Teminuosi/3x-ui 分支")
-        return PanelAPI(ssh, record, token.group(1) if token else "", self.secret(record, "panelPassword"))
+        api = PanelAPI(ssh, record, token.group(1) if token else "", self.secret(record, "panelPassword"))
+        if install_type(record) == "x-ui":
+            api.request("panel/api/inbounds/list")
+        return api
 
     def attach_existing(self, server_id):
         def action(api, record):
@@ -521,7 +667,7 @@ echo '=== DNS ==='
 
     def start_install(self, server_id, confirmed):
         if confirmed is not True:
-            raise ValueError("请确认在该服务器安装/更新 3x-ui 并设置管理员凭证")
+            raise ValueError("请确认在该服务器安装/更新所选软件")
         with self.lock:
             record = copy.deepcopy(self.record(server_id))
             if record.get("connectionMode") == "existing":
@@ -536,7 +682,7 @@ echo '=== DNS ==='
             if len(running) >= 2:
                 raise ValueError("已有两个安装任务运行，请等待其中一个结束")
             job = {"id": secrets.token_hex(12), "serverId": server_id, "status": "running",
-                   "stage": "connecting", "startedAt": int(time.time()), "log": "", "error": ""}
+                   "installType": install_type(record), "stage": "connecting", "startedAt": int(time.time()), "log": "", "error": ""}
             self.data["jobs"] = [j for j in self.data["jobs"] if j["status"] == "running"] + [
                 j for j in self.data["jobs"] if j["status"] != "running"][-47:]
             self.data["jobs"].append(job)
@@ -561,10 +707,20 @@ echo '=== DNS ==='
         try:
             ssh = self.connect(record)
             log("SSH 已连接，开始安装。\n")
-            code, _ = self.execute(ssh, record, install_script(record, secret_values[1]), timeout=2700, on_line=log)
+            script_record = copy.deepcopy(record)
+            if script_record.get("coreConfig"):
+                script_record["coreConfig"] = self.secret(record, "coreConfig")
+                secret_values.append(script_record["coreConfig"])
+            code, _ = self.execute(ssh, record, install_script(script_record, secret_values[1]), timeout=2700, on_line=log)
             job["exitCode"] = code
             if code:
                 raise ValueError(installation_error(job["log"], job["stage"], code))
+            if install_type(record) not in PANEL_TYPES:
+                with self.lock:
+                    job.update(status="succeeded", stage="complete")
+                    self.record(record["id"])["lastError"] = ""
+                log("内核安装、配置校验和 systemd 服务检查已通过。节点由内核 JSON 配置管理。\n")
+                return
             job["stage"] = "api-check"
             for attempt in range(15):
                 try:
@@ -591,7 +747,7 @@ echo '=== DNS ==='
                     job["panelUrl"] = record["panelUrl"]
             log("\n失败原因：" + message + "\n")
             if ssh:
-                if not record.get("panelUrl"):
+                if install_type(record) in PANEL_TYPES and not record.get("panelUrl"):
                     try:
                         self.panel(ssh, record)
                     except Exception:
@@ -635,7 +791,10 @@ echo '=== DNS ==='
             rows = api.request("panel/api/inbounds/list") or []
             if not isinstance(rows, list):
                 raise ValueError("3x-ui 入站列表格式无效")
+            counts = self.meter_snapshot(record, api.ssh) if record.get("meters") else {}
             for row in rows:
+                if row.get("id") in counts:
+                    row.update(counts[row["id"]])
                 if not isinstance(row, dict):
                     raise ValueError("3x-ui 入站记录格式无效")
                 row["id"] = positive_id(row.get("id"))
@@ -650,6 +809,132 @@ echo '=== DNS ==='
                     pass
             return {"inbounds": rows, "server": self.public(self.record(server_id))}
         return self.with_panel(server_id, action)
+
+    def disconnect_port(self, server_id, port):
+        """Remove established TCP sockets for a dedicated revoked inbound."""
+        port = valid_port(port)
+        record = copy.deepcopy(self.record(server_id))
+        ssh = self.connect(record)
+        try:
+            code, _ = self.execute(ssh, record, f"command -v ss >/dev/null && ss -K -t sport = :{port}", timeout=20)
+            if code:
+                raise ValueError("入站已删除，但清理存量 TCP 连接失败；请安装 iproute2 并检查 root/sudo 权限，后台会重试")
+        finally:
+            ssh.close()
+
+    def ensure_meter(self, server_id, inbound_id):
+        """Explicitly provision host counters before accepting a metered binding."""
+        inbound_id = positive_id(inbound_id)
+        def action(api, record):
+            if install_type(record) in PANEL_TYPES:
+                return
+            row = next((r for r in api.request("panel/api/inbounds/list") if r["id"] == inbound_id), None)
+            if not row:
+                raise ValueError("入站不存在")
+            port = valid_port(row["port"])
+            script = f"""set -Eeuo pipefail
+command -v nft >/dev/null || {{ echo 'Install nftables first to enable standalone core traffic accounting'; exit 12; }}
+exec 8>/var/lock/mxioc-meter.lock
+flock -n 8 || exit 75
+if ! nft list table inet mxioc_usage >/dev/null 2>&1; then
+  nft -f - <<'NFT'
+add table inet mxioc_usage
+add chain inet mxioc_usage input {{ type filter hook input priority -10; policy accept; }}
+add chain inet mxioc_usage output {{ type filter hook output priority -10; policy accept; }}
+NFT
+fi
+if ! nft list counter inet mxioc_usage up_{inbound_id} >/dev/null 2>&1; then
+  nft -f - <<'NFT'
+add counter inet mxioc_usage up_{inbound_id}
+add counter inet mxioc_usage down_{inbound_id}
+add rule inet mxioc_usage input meta l4proto {{ tcp, udp }} th dport {port} counter name up_{inbound_id}
+add rule inet mxioc_usage output meta l4proto {{ tcp, udp }} th sport {port} counter name down_{inbound_id}
+NFT
+fi
+mkdir -p /etc/mxioc-meter
+nft -s list table inet mxioc_usage > /etc/mxioc-meter/rules.nft.tmp
+chmod 600 /etc/mxioc-meter/rules.nft.tmp
+mv /etc/mxioc-meter/rules.nft.tmp /etc/mxioc-meter/rules.nft
+cat > /etc/systemd/system/mxioc-meter-restore.service <<'UNIT'
+[Unit]
+Description=Restore MXIOC dedicated inbound accounting rules
+Before=xray.service sing-box.service
+After=nftables.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'nft list table inet mxioc_usage >/dev/null 2>&1 || nft -f /etc/mxioc-meter/rules.nft'
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable mxioc-meter-restore.service
+"""
+            code, _ = self.execute(api.ssh, record, script, timeout=30)
+            if code:
+                raise ValueError("独立内核计量初始化失败，请先安装 nftables；不能在无法计量时启用流量限制")
+            with self.lock:
+                self.record(server_id).setdefault("meters", {})[str(inbound_id)] = port
+                self.flush()
+        return self.with_panel(server_id, action)
+
+    def meter_snapshot(self, record, ssh):
+        code, raw = self.execute(ssh, record, "nft -j list table inet mxioc_usage", timeout=20)
+        if code:
+            raise ValueError("内核计量规则丢失，流量不可核实；请重新绑定节点以恢复计量")
+        values = {}
+        for entry in json.loads(raw).get("nftables", []):
+            counter = entry.get("counter", {})
+            match = re.fullmatch(r"(up|down)_(\d+)", counter.get("name", ""))
+            if match and match.group(2) in record.get("meters", {}):
+                values.setdefault(int(match.group(2)), {})[match.group(1)] = counter.get("bytes", 0)
+        for identity in record.get("meters", {}):
+            if set(values.get(int(identity), {})) != {"up", "down"}:
+                raise ValueError("内核计量计数器缺失，不能将用量当作零")
+        return values
+
+    def test_sni(self, server_id, candidates):
+        if not isinstance(candidates, list) or not 1 <= len(candidates) <= 20:
+            raise ValueError("每次测试 1–20 个 SNI 域名")
+        domains = list(dict.fromkeys(valid_domain(x) for x in candidates))
+        if any(not x for x in domains):
+            raise ValueError("SNI 域名不能为空")
+        record = copy.deepcopy(self.record(server_id))
+        ssh = self.connect(record)
+        probe = r'''import concurrent.futures, ipaddress, json, socket, ssl, time
+names = json.loads(__import__('base64').b64decode('CANDIDATES'))
+def probe(name):
+    start = time.monotonic()
+    result = {"domain": name, "ok": False}
+    try:
+        addresses = socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+            raise ValueError("目标解析为非公网地址")
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        family, socktype, proto, _, address = addresses[0]
+        with socket.socket(family, socktype, proto) as raw:
+            raw.settimeout(4)
+            raw.connect(address)
+            with context.wrap_socket(raw, server_hostname=name) as tls:
+                result.update(ok=True, latencyMs=round((time.monotonic()-start)*1000, 1),
+                              tls=tls.version(), alpn=tls.selected_alpn_protocol())
+    except Exception as exc:
+        result['error'] = str(exc)[:180]
+    return result
+with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+    rows = list(pool.map(probe, names))
+print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
+'''
+        encoded = base64.b64encode(json.dumps(domains).encode()).decode()
+        try:
+            code, raw = self.execute(ssh, record, "python3 - <<'MXIOC_SNI'\n" + probe.replace('CANDIDATES', encoded) + "\nMXIOC_SNI", timeout=40)
+            if code:
+                raise ValueError("SNI 测试失败，目标服务器需要 Python 3 和可用的系统 CA")
+            return {"results": json.loads(raw)}
+        finally:
+            ssh.close()
 
     def create_inbound(self, server_id, payload):
         def action(api, record):
@@ -711,7 +996,14 @@ echo '=== DNS ==='
 
     def create_relay(self, server_id, payload):
         landing = self.parse_link(text(payload.get("landingLink"), "落地分享链接", maximum=12000))
-        outbound = node_outbound(landing, "mxioc-relay-" + secrets.token_hex(8))
+        tag = "mxioc-relay-" + secrets.token_hex(8)
+        if landing.get("type") in ("hysteria2", "tuic"):
+            if install_type(self.record(server_id)) != "sing-box":
+                raise ValueError("Hysteria2 / TUIC 落地仅支持 sing-box 入口服务器")
+            from core_adapter import sing_quic_outbound
+            outbound = {"tag": tag, "protocol": "mxioc-native", "settings": {"native": sing_quic_outbound(landing, tag)}}
+        else:
+            outbound = node_outbound(landing, tag)
 
         def action(api, record):
             original, wrapper = read_xray(api)
@@ -762,7 +1054,7 @@ def prepare_inbound(payload):
         raise ValueError("入站配置必须是 JSON 对象")
     result = {key: value for key, value in payload.items() if key in INBOUND_FIELDS}
     result["port"] = valid_port(result.get("port"))
-    if result.get("protocol") not in {"vless", "vmess", "trojan", "shadowsocks", "socks", "http", "dokodemo-door", "mixed", "tunnel"}:
+    if result.get("protocol") not in {"vless", "vmess", "trojan", "shadowsocks", "socks", "http", "dokodemo-door", "mixed", "tunnel", "hysteria2", "tuic"}:
         raise ValueError("不支持该 Xray 入站协议")
     for key in ("settings", "streamSettings", "sniffing"):
         if key in result:
@@ -791,6 +1083,23 @@ def build_inbound(api, payload):
         stream.update(security="reality", realitySettings={"show": False, "xver": 0, "target": sni + ":443",
                       "serverNames": [sni], "privateKey": keys["privateKey"], "shortIds": [secrets.token_hex(8)],
                       "settings": {"publicKey": keys["publicKey"], "fingerprint": "chrome", "serverName": sni, "spiderX": "/"}})
+    elif template in ("trojan-tls", "vless-ws-tls", "hysteria2", "tuic"):
+        sni = valid_domain(payload.get("serverName"))
+        if not sni:
+            raise ValueError("TLS 模板必须填写证书对应域名")
+        cert = text(payload.get("certFile"), "远端证书文件路径", maximum=512)
+        key = text(payload.get("keyFile"), "远端私钥文件路径", maximum=512)
+        if any(not p.startswith("/") or ".." in Path(p).parts for p in (cert, key)):
+            raise ValueError("证书和私钥必须填写远端绝对路径")
+        if template in ("hysteria2", "tuic") and getattr(api, "kind", "") != "sing-box":
+            raise ValueError("Hysteria2 / TUIC 模板仅支持独立 sing-box 内核")
+        if template in ("trojan-tls", "hysteria2", "tuic"):
+            client["password"] = secrets.token_urlsafe(24)
+            protocol, settings = ("trojan" if template == "trojan-tls" else template), {"clients": [client]}
+        else:
+            protocol, settings = "vless", {"clients": [client], "decryption": "none"}
+            stream.update(network="ws", wsSettings={"path": text(payload.get("path", "/"), "WebSocket 路径", maximum=256)})
+        stream.update(security="tls", tlsSettings={"serverName": sni, "alpn": ["h3"] if template in ("hysteria2", "tuic") else ["h2", "http/1.1"], "certificates": [{"certificateFile": cert, "keyFile": key}]})
     elif template == "vmess-tcp":
         protocol, settings = "vmess", {"clients": [client], "disableInsecureEncryption": False}
     elif template == "shadowsocks":
@@ -808,16 +1117,23 @@ def inbound_nodes(inbound, record):
     stream = json_object(inbound.get("streamSettings", {}))
     protocol = inbound.get("protocol")
     base = {"name": inbound.get("remark") or "3x-ui 节点", "server": record["host"], "port": inbound["port"]}
+    if protocol in ("socks", "http"):
+        accounts = settings.get("accounts", []) or [{}]
+        return [{**base, "type": "socks5" if protocol == "socks" else "http",
+                 **({"username": account.get("user", ""), "password": account.get("pass", "")} if account else {})}
+                for account in accounts]
     if protocol == "shadowsocks" and settings.get("password"):
         return [{**base, "type": "ss", "cipher": settings["method"], "password": settings["password"]}]
-    if protocol not in ("vless", "vmess", "trojan"):
+    if protocol not in ("vless", "vmess", "trojan", "hysteria2", "tuic"):
         return []
     result = []
     for client in settings.get("clients", []):
         if client.get("enable") is False:
             continue
         node = {**base, "type": protocol, "name": base["name"] + (" / " + str(client.get("email", "")) if len(settings["clients"]) > 1 else "")}
-        node["password" if protocol == "trojan" else "uuid"] = client.get("password" if protocol == "trojan" else "id", "")
+        node["password" if protocol in ("trojan", "hysteria2") else "uuid"] = client.get("password" if protocol in ("trojan", "hysteria2") else "id", "")
+        if protocol == "tuic":
+            node["password"] = client.get("password", "")
         if protocol == "vmess":
             node.update(cipher="auto", alterId=0)
         if client.get("flow"):
@@ -834,6 +1150,9 @@ def inbound_nodes(inbound, record):
             node["tls"] = True
             tls = stream.get("tlsSettings", {})
             node["servername"] = tls.get("serverName") or record.get("domain", "")
+            if protocol in ("hysteria2", "tuic"):
+                node["sni"] = node["servername"]
+                node["alpn"] = tls.get("alpn", ["h3"])
         if security == "reality":
             reality = stream.get("realitySettings", {})
             public_key = reality.get("settings", {}).get("publicKey")

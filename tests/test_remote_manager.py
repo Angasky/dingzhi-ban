@@ -426,6 +426,45 @@ class PanelTunnelTests(unittest.TestCase):
             httpd.server_close()
             thread.join(3)
 
+    def test_classic_xui_route_fallback_uses_authenticated_read_only_probe(self):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def reply(self, obj):
+                raw = json.dumps({"success": True, "obj": obj}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Set-Cookie", "session=legacy; HttpOnly")
+                self.end_headers()
+                self.wfile.write(raw)
+            def do_GET(self):
+                received.append((self.command, self.path))
+                if self.path.endswith("csrf-token") or "/panel/api/" in self.path:
+                    return self.send_error(404)
+                self.reply([])
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                received.append((self.command, self.path))
+                self.reply(None)
+            def log_message(self, *_):
+                pass
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        ssh, transport = Mock(), Mock()
+        ssh.get_transport.return_value = transport
+        transport.open_channel.side_effect = lambda *args, **kwargs: socket.create_connection(httpd.server_address)
+        try:
+            api = remote.PanelAPI(ssh, {"host": "198.51.100.2", "panelPort": 2053, "panelPath": "/secret/",
+                "panelUser": "admin", "connectionMode": "existing", "installType": "x-ui"}, "", "old-password")
+            self.assertEqual(api.request("panel/api/inbounds/list"), [])
+            self.assertIn(("GET", "/secret/panel/api/inbounds/list"), received)
+            self.assertIn(("GET", "/secret/xui/API/inbounds/list"), received)
+            self.assertEqual([p for method, p in received if method == "POST"], ["/secret/login"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(3)
+
     def test_http_api_stays_on_ssh_loopback_and_sends_bearer_and_form(self):
         received = {}
 
