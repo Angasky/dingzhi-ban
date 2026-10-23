@@ -1,4 +1,4 @@
-# 🚀 MXIOC VPN Manager
+# 🚀 MXIOC VPN Manager · 定制版
 
 一个面向 Mihomo / Clash 的可视化订阅管理后台。无需数据库，通过网页即可管理节点、链式代理、策略组、路由规则、DNS 分流和多份订阅配置。
 
@@ -9,7 +9,7 @@
 在 Linux 服务器中执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Angasky/mxioc-vpn-manager/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Angasky/dingzhi-ban/main/install.sh | sudo bash
 ```
 
 安装完成后，服务器会自动创建快捷命令：

@@ -8,7 +8,7 @@ CONFIG_FILE="${CONFIG_DIR}/clash-cn-route"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 NGINX_CONF="/etc/nginx/conf.d/${APP_NAME}.conf"
 SHORTCUT_FILE="/usr/local/bin/vpn"
-RAW_BASE="${MXIOC_RAW_BASE:-https://raw.githubusercontent.com/Angasky/mxioc-vpn-manager/main}"
+RAW_BASE="${MXIOC_RAW_BASE:-https://raw.githubusercontent.com/Angasky/dingzhi-ban/main}"
 MODE=""
 DOMAIN=""
 CERT_EMAIL=""
@@ -474,7 +474,7 @@ cleanup() {
 trap cleanup EXIT
 
 curl -fsSL --retry 3 --connect-timeout 10 \
-    https://raw.githubusercontent.com/Angasky/mxioc-vpn-manager/main/install.sh \
+    https://raw.githubusercontent.com/Angasky/dingzhi-ban/main/install.sh \
     -o "${installer}"
 chmod 0700 "${installer}"
 
@@ -541,7 +541,7 @@ write_release_version() {
     fi
     if [[ -z "${release_sha}" ]]; then
         release_sha="$(curl -fsSL --connect-timeout 10 -H 'Accept: application/vnd.github+json' \
-            https://api.github.com/repos/Angasky/mxioc-vpn-manager/commits/main 2>/dev/null \
+            https://api.github.com/repos/Angasky/dingzhi-ban/commits/main 2>/dev/null \
             | python3 -c 'import json,sys; print(json.load(sys.stdin).get("sha", ""))' 2>/dev/null || true)"
     fi
     if [[ "${release_sha}" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
