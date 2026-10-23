@@ -85,6 +85,7 @@ class EndToEndTests(unittest.TestCase):
     def test_creation_import_multiplier_bandwidth_exhaustion_and_renewal(self):
         identity, inbound = self.add_server_and_node()
         self.request('PUT', '/traffic', {'enforce':True,'upload':0,'download':0,'total':1000,'multiplier':2})
+        self.request('PUT', '/servers/multiplier', {'serverId':identity,'inboundId':inbound,'multiplier':2})
         self.request('PUT', '/servers/bandwidth', {'serverId':identity,'inboundId':inbound,'uploadMbps':1,'downloadMbps':2})
         self.assertEqual(self.manager.record(identity)['bandwidths'][str(inbound)]['downloadKbps'], 2000)
         self.api.rows[0].update(up=100, down=200)
@@ -113,7 +114,8 @@ class EndToEndTests(unittest.TestCase):
         identity, inbound = self.add_server_and_node()
         self.request('PUT','/servers/bandwidth',{'serverId':identity,'inboundId':inbound,'downloadMbps':3})
         result, _ = self.request('PUT','/traffic',{'enforce':True,'total':1000,'expire':1})
-        self.assertTrue(result['traffic']['expired']); self.assertTrue(result['traffic']['revoked'])
+        self.assertTrue(result['traffic']['expired'])
+        server.enforce_profile('clash')  # Background worker processes the saved policy.
         self.assertFalse(self.api.rows); self.assertFalse(self.manager.record(identity)['bandwidths'])
 
     def test_csrf_validation_logout_and_persisted_cookie(self):
@@ -131,5 +133,5 @@ class EndToEndTests(unittest.TestCase):
             result = subprocess.run(['node',str(script)], env={**os.environ,'MXIOC_TEST_URL':self.base}, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertFalse(self.manager.record(self.manager.list()[0]['id']).get('bandwidths'))
-        self.assertEqual(server.traffic_info(server.profile_record())['multiplier'], 2.5)
+        self.assertEqual(server.profile_record()['remoteNodes'][0]['multiplierUnits'], 2500)
         print(result.stdout.strip())

@@ -2651,9 +2651,31 @@ function trafficSummary() {
       <div><span>剩余流量</span><strong>${formatBytes(t.remaining)}</strong></div>
       <div><span>到期时间</span><strong class="usage-date">${t.expire ? esc(new Date(t.expire * 1000).toLocaleString('zh-CN')) : '长期有效'}</strong></div>
     </div>${t.total != null ? `<progress class="usage-progress" max="100" value="${t.percent}" aria-label="流量已使用百分比"></progress><div class="hint">已用 ${t.percent}% · 上传 ${formatBytes(t.upload)} / 下载 ${formatBytes(t.download)}</div>` : ''}
-    <div class="hint">计费倍率 ${esc(t.multiplier ?? 1)} 倍 · 服务器原始采集 ${formatBytes(t.rawUsed || 0)}（不含手工录入）</div><div class="hint">${t.enforce ? '服务器累计' : '手动录入'} · 最近更新 ${t.updatedAt ? esc(new Date(t.updatedAt * 1000).toLocaleString('zh-CN')) : '—'}</div>`
+    <div class="hint">按节点独立倍率计费 · 服务器原始采集 ${formatBytes(t.rawUsed || 0)}（不含手工录入）</div><div class="hint">${t.enforce ? '服务器累计' : '手动录入'} · 最近更新 ${t.updatedAt ? esc(new Date(t.updatedAt * 1000).toLocaleString('zh-CN')) : '—'}</div>`
     : '<p class="muted">尚未设置流量额度和有效期。设置后，三个客户端订阅会使用同一份流量信息。</p>'}
   </section>`;
+}
+
+function nodeMultiplierModal(encoded, inboundId) {
+  const serverId = decodeURIComponent(encoded), profile = S.profile;
+  const t = S.data.profile?.traffic || {};
+  const binding = (t.bindings || []).find(b => b.serverId === serverId && b.inboundId === inboundId && b.status === 'active');
+  if (!binding) return notice('请先将节点绑定当前订阅');
+  openModal('节点流量倍率 · ' + (binding.name || inboundId), `<form id="nodeMultiplierForm"><label for="nodeMultiplier">此节点计费倍率</label><input id="nodeMultiplier" type="number" min="0" max="100" step="0.001" required value="${(binding.multiplierUnits ?? ((t.multiplier ?? 1) * 1000)) / 1000}"><p class="hint">只作用于此入站绑定节点。例如 2 倍：实际使用 1 GiB，订阅扣除 2 GiB。0 倍免流量计费，到期限制仍有效。修改前只连接这台服务器结算旧倍率，历史账单不重算；其他节点不受影响。</p><div id="nodeMultiplierError" class="error" role="alert"></div><button id="nodeMultiplierSave" type="submit" class="btn primary">结算并保存节点倍率</button></form>`);
+  $('nodeMultiplierForm').onsubmit = async event => {
+    event.preventDefault();
+    const button = $('nodeMultiplierSave'), errorBox = $('nodeMultiplierError');
+    button.disabled = true; errorBox.textContent = '';
+    try {
+      const result = await api('/servers/multiplier', {...jsonOpt('PUT', {serverId, inboundId, multiplier: Number(val('nodeMultiplier'))}), headers:{'Content-Type':'application/json','X-Profile':profile}});
+      if (S.profile === profile) {
+        binding.multiplierUnits = result.node.multiplier * 1000;
+        if (result.traffic) S.data.profile.traffic = result.traffic;
+        closeModal(); if (S.page === 'traffic') traffic();
+      }
+      notice('该节点流量倍率已保存');
+    } catch (error) { if (errorBox.isConnected) { errorBox.textContent = error.message; button.disabled = false; } }
+  };
 }
 
 function traffic() {
@@ -2669,10 +2691,9 @@ function traffic() {
       <div><label for="trafficTotal">总流量额度</label><input id="trafficTotal" type="number" min="0" step="any" placeholder="留空表示不限" value="${t.total != null ? t.total / unit : ''}"></div>
       <div><label for="trafficUpload">已用上传计费流量</label><input id="trafficUpload" type="number" min="0" step="any" required value="${(t.upload || 0) / unit}"></div>
       <div><label for="trafficDownload">已用下载计费流量</label><input id="trafficDownload" type="number" min="0" step="any" required value="${(t.download || 0) / unit}"></div>
-      <div class="span2"><label for="trafficMultiplier">流量计费倍率</label><input id="trafficMultiplier" type="number" min="0" max="100" step="0.001" required value="${t.multiplier ?? 1}"><p class="hint">例如 2 倍：实际采集 1 GiB，订阅扣除 2 GiB。只影响新采集的用量，不重算历史账单；0 倍不扣流量，到期限制仍有效。修改倍率前会先结算原倍率用量。自动计量需启用服务器强制限制并绑定专属入站。</p></div>
       <div class="span2"><label for="trafficExpire">到期时间（当前设备本地时间）</label><input id="trafficExpire" type="datetime-local" step="1" value="${dateValue}"><p class="hint">留空表示长期有效；已用流量为上传与下载之和。客户端是否显示额度取决于其版本。</p></div>
     </div><label class="inlinecheck"><input id="trafficEnforce" type="checkbox" ${t.enforce || !t.configured ? 'checked' : ''}>启用服务器强制限制（会删除本订阅专属入站）</label><p class="hint">独立 Xray / sing-box 启用计量前需在远端安装 nftables。计量包含网络协议开销；阈值存在巡检延迟，离线服务器的撤销会持续重试。请勿把其他用户共用入站绑定到此订阅。</p><div class="toolbar"><button id="trafficSync" class="btn" type="button">立即同步用量 / 重试撤销</button></div>
-    <div class="tablewrap"><table><thead><tr><th>专属入站</th><th>服务器 / ID</th><th>状态 / 限速</th><th>操作 / 错误</th></tr></thead><tbody>${(t.bindings || []).map(b => `<tr><td>${esc(b.name || '')} : ${b.port}</td><td>${esc(b.serverId)} / ${b.inboundId}</td><td>${esc(b.status)}<div class="hint">${bandwidthLabel(b.bandwidth)}</div></td><td><button type="button" class="btn small" onclick="nodeBandwidthModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点带宽限制</button><div class="error">${esc(b.error || '')}</div></td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚未绑定服务器入站，请到服务器节点创建或绑定专属入站</td></tr>'}</tbody></table></div>${t.enforcementError ? `<p class="error">${esc(t.enforcementError)}</p>` : ''}
+    <div class="tablewrap"><table><thead><tr><th>专属入站</th><th>服务器 / ID</th><th>状态 / 限速</th><th>操作 / 错误</th></tr></thead><tbody>${(t.bindings || []).map(b => `<tr><td>${esc(b.name || '')} : ${b.port}</td><td>${esc(b.serverId)} / ${b.inboundId}</td><td>${esc(b.status)} · ${esc((b.multiplierUnits ?? ((t.multiplier ?? 1) * 1000)) / 1000)} 倍<div class="hint">${bandwidthLabel(b.bandwidth)}</div></td><td><button type="button" class="btn small" onclick="nodeBandwidthModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点带宽限制</button><button type="button" class="btn small" onclick="nodeMultiplierModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点流量倍率</button><div class="error">${esc(b.error || '')}</div></td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚未绑定服务器入站，请到服务器节点创建或绑定专属入站</td></tr>'}</tbody></table></div>${t.enforcementError ? `<p class="error">${esc(t.enforcementError)}</p>` : ''}
     <div id="trafficError" class="error" role="alert"></div><div class="toolbar">
       <button id="trafficSave" class="btn primary" type="submit">保存并同步订阅信息</button>
       <button id="trafficDisable" class="btn" type="button" ${!t.configured ? 'disabled' : ''}>关闭限制与信息展示</button>
@@ -2694,10 +2715,11 @@ function traffic() {
     const profile = S.profile;
     $('trafficSave').disabled = $('trafficDisable').disabled = true;
     try {
-      await api('/traffic', jsonOpt('PUT', payload));
+      const result = await api('/traffic', jsonOpt('PUT', payload));
       if (S.profile !== profile) return;
-      await loadProfiles();
-      await reload(false);
+      if (S.data?.profile) S.data.profile.traffic = result.traffic;
+      const record = S.profiles.find(p => p.id === profile);
+      if (record) record.traffic = result.traffic;
       if (S.page === 'traffic') traffic();
       notice('额度与限制策略已保存');
     } catch (error) {
@@ -2719,9 +2741,8 @@ function traffic() {
       };
       const expire = $('trafficExpire').value ? new Date($('trafficExpire').value).getTime() / 1000 : null;
       if (expire !== null && (!Number.isSafeInteger(expire) || expire <= 0)) throw Error('请选择有效的到期时间');
-      const upload = bytes('trafficUpload'), download = bytes('trafficDownload'), multiplier = Number(val('trafficMultiplier'));
-      if (!Number.isFinite(multiplier) || multiplier < 0 || multiplier > 100) throw Error('流量倍率须为 0–100');
-      void save({ enabled: true, enforce: $('trafficEnforce').checked, upload, download, total: bytes('trafficTotal'), expire, multiplier,
+      const upload = bytes('trafficUpload'), download = bytes('trafficDownload');
+      void save({ enabled: true, enforce: $('trafficEnforce').checked, upload, download, total: bytes('trafficTotal'), expire,
         preserveUsage: upload === (t.upload || 0) && download === (t.download || 0) });
     } catch (error) { $('trafficError').textContent = error.message; }
   };

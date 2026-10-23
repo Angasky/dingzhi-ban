@@ -102,6 +102,7 @@ LOGIN_LOCK = threading.RLock()
 LOCK = threading.RLock()
 ENFORCEMENT_LOCK = threading.RLock()
 ENFORCEMENT_INTERVAL = 30
+ENFORCEMENT_WAKE = threading.Event()
 UPDATE_LOCK = threading.RLock()
 GEO_LOCK = threading.RLock()
 GEO_RATE_LOCK = threading.Lock()
@@ -539,6 +540,25 @@ def _traffic_info(record):
 
 def update_traffic(payload):
     from bandwidth import multiplier_units
+    # A quota/date edit does not alter ownership or remote resources. Serialize its
+    # local write with metering commits, not with slow SSH collection. Once remote
+    # revocation has begun, keep the original enforcement-lock ordering for renewal.
+    with LOCK:
+        record = profile_record()
+        previous = record.get("traffic") or {}
+        units = multiplier_units(payload.get("multiplier", previous.get("multiplierUnits", 1000) / 1000))
+        if (payload.get("enabled") is not False and previous.get("enforce")
+                and payload.get("enforce", True) is True and not record.get("accessRevoked")
+                and units == previous.get("multiplierUnits", 1000)):
+            fast_payload = dict(payload)
+            preserve = fast_payload.get("preserveUsage", False)
+            if type(preserve) is not bool:
+                raise ValueError("保留用量参数无效")
+            if preserve:
+                fast_payload.update(upload=previous.get("upload", 0), download=previous.get("download", 0))
+            result = _update_traffic(fast_payload)
+            ENFORCEMENT_WAKE.set()
+            return result
     with ENFORCEMENT_LOCK:
         payload = dict(payload)
         old = profile_record().get("traffic") or {}
@@ -555,12 +575,15 @@ def update_traffic(payload):
         if preserve:
             current = profile_record().get("traffic") or {}
             payload.update(upload=current.get("upload", 0), download=current.get("download", 0))
-        if payload.get("enforce") is True:
+        if payload.get("enforce") is True and not old.get("enforce"):
             for binding in profile_record().get("remoteNodes", []):
                 if binding.get("status") == "active":
                     remote_manager().ensure_meter(binding["serverId"], binding["inboundId"])
         result = _update_traffic(payload)
-        enforce_profile(profile_record()["id"])
+        # Normal edits must not synchronously SSH to every bound server.
+        # The existing sweep handles metering/revocation; explicit sync remains available.
+        if (profile_record().get("traffic") or {}).get("enforce"):
+            ENFORCEMENT_WAKE.set()
         return traffic_info(profile_record())
 
 
@@ -601,6 +624,7 @@ def validate_traffic_update(payload, record):
 def _update_traffic(payload):
     with LOCK:
         record = profile_record()
+        legacy_units = (record.get("traffic") or {}).get("multiplierUnits", 1000)
         if payload.get("enabled") is False:
             if record.get("accessRevoked"):
                 raise ValueError("节点已撤销，请先续期/调整额度并重新创建专属节点")
@@ -609,6 +633,9 @@ def _update_traffic(payload):
             record["traffic"] = validate_traffic_update(payload, record)
             if not traffic_info(record).get("expired") and not traffic_info(record).get("exhausted"):
                 record.pop("accessRevoked", None)
+        if "multiplier" not in payload:
+            for binding in record.get("remoteNodes", []):
+                binding.setdefault("multiplierUnits", legacy_units)
         save_profiles(load_profiles())
         return traffic_info(record)
 
@@ -668,7 +695,7 @@ def bind_remote_node(server_id, inbound_id, profile_id=None):
         # First binding starts at the current counter, not historic shared usage.
         binding = {"serverId": server_id, "inboundId": inbound_id, "name": row.get("remark", ""),
                    "port": row["port"], "status": "active", "up": row.get("up", 0),
-                   "down": row.get("down", 0), "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""}
+                   "down": row.get("down", 0), "multiplierUnits": 1000, "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""}
         with LOCK:
             profile_record(profile_id).setdefault("remoteNodes", []).append(binding)
             save_profiles(load_profiles())
@@ -775,7 +802,30 @@ def set_node_bandwidth(payload):
         return result
 
 
-def enforce_profile(profile_id, revoke=True):
+def set_node_multiplier(payload):
+    from bandwidth import multiplier_units
+    from remote_manager import positive_id
+    units = multiplier_units(payload.get("multiplier"))
+    server_id, inbound_id = str(payload.get("serverId", "")), positive_id(payload.get("inboundId"))
+    with ENFORCEMENT_LOCK:
+        record = profile_record()
+        binding = next((b for b in record.get("remoteNodes", []) if b.get("serverId") == server_id
+                        and b.get("inboundId") == inbound_id and b.get("status") == "active"), None)
+        if not binding:
+            raise ValueError("只能为当前订阅绑定的有效节点设置倍率")
+        old = binding.get("multiplierUnits", (record.get("traffic") or {}).get("multiplierUnits", 1000))
+        if old != units and (record.get("traffic") or {}).get("enforce"):
+            if not enforce_profile(record["id"], revoke=False, only_binding=(server_id, inbound_id)):
+                raise ValueError("该节点原倍率用量结算失败，倍率未修改，请恢复服务器连接后重试")
+            if binding.get("status") != "active":
+                raise ValueError("节点已失效，请刷新节点列表")
+        with LOCK:
+            binding["multiplierUnits"] = units
+            save_profiles(load_profiles())
+        return {"serverId": server_id, "inboundId": inbound_id, "multiplier": units / 1000}
+
+
+def enforce_profile(profile_id, revoke=True, only_binding=None):
     """Accumulate deltas and retry remote revocation, including after restart.
 
     No global config lock is held while SSH/network operations are in progress.
@@ -785,6 +835,8 @@ def enforce_profile(profile_id, revoke=True):
         with LOCK:
             record = profile_record(profile_id)
             bindings = [b for b in record.get("remoteNodes", []) if b.get("status") == "active"]
+            if only_binding is not None:
+                bindings = [b for b in bindings if (b["serverId"], b["inboundId"]) == only_binding]
             enabled = bool((record.get("traffic") or {}).get("enforce"))
         if not enabled:
             return True
@@ -834,7 +886,7 @@ def enforce_profile(profile_id, revoke=True):
                         raise ValueError("服务器流量计数无效")
                     previous = current.get(remote_key, 0)
                     delta = value - previous if value >= previous else value
-                    units = stored.get("multiplierUnits", 1000)
+                    units = current.get("multiplierUnits", stored.get("multiplierUnits", 1000))
                     billed, remainder = divmod(delta * units + current.get(local_key + "Remainder", 0), 1000)
                     stored[local_key] = stored.get(local_key, 0) + min(billed, max(0, 9_007_199_254_740_991 - stored.get("upload", 0) - stored.get("download", 0)))
                     raw_key = "rawUpload" if local_key == "upload" else "rawDownload"
@@ -895,7 +947,8 @@ def enforcement_loop():
                         save_profiles(load_profiles())
                     except ValueError:
                         pass
-        time.sleep(ENFORCEMENT_INTERVAL)
+        ENFORCEMENT_WAKE.wait(ENFORCEMENT_INTERVAL)
+        ENFORCEMENT_WAKE.clear()
 
 
 def create_owned_remote(payload, relay=False):
@@ -913,7 +966,7 @@ def create_owned_remote(payload, relay=False):
                 profile_record(profile_id).setdefault("remoteNodes", []).append({
                     "serverId": server_id, "inboundId": row["id"], "name": row.get("remark", ""),
                     "port": row["port"], "status": "active", "up": 0, "down": 0,
-                    "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""})
+                    "multiplierUnits": 1000, "boundAt": int(time.time()), "identityHash": remote_node_identity(row), "error": ""})
                 save_profiles(load_profiles())
             if (profile_record(profile_id).get("traffic") or {}).get("enforce"):
                 manager.ensure_meter(server_id, row["id"])
@@ -3369,6 +3422,9 @@ class Handler(BaseHTTPRequestHandler):
             self.select_profile()
             if path == "/admin/api/servers/bandwidth":
                 return self.json_out({"ok": True, "bandwidth": set_node_bandwidth(data)})
+            if path == "/admin/api/servers/multiplier":
+                result = set_node_multiplier(data)
+                return self.json_out({"ok": True, "node": result, "traffic": traffic_info(profile_record())})
             if path == "/admin/api/traffic":
                 return self.json_out({"ok": True, "traffic": update_traffic(data)})
             if path == "/admin/api/nodes":

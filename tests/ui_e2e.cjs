@@ -12,13 +12,18 @@ const puppeteer=require('puppeteer-core'),assert=require('assert'),path=require(
   const dir=process.env.MXIOC_SCREENSHOT_DIR||'/tmp/mxioc-e2e';fs.mkdirSync(dir,{recursive:true});
   for(const theme of ['high','low','pink']){
    await page.evaluate(async theme=>{setTheme(theme);await go('traffic');},theme);
-   await page.$eval('#trafficMultiplier',n=>{n.value='2.5';});await page.click('#trafficEnforce');
+   await page.click('#trafficEnforce');
    // Keep enforcement enabled when returning from the previous theme.
    await page.$eval('#trafficEnforce',n=>{n.checked=true;});
    const saved=page.waitForResponse(r=>r.url().endsWith('/admin/api/traffic')&&r.request().method()==='PUT');
    await page.click('#trafficSave');assert.equal((await saved).status(),200);
    await page.waitForFunction(()=>document.getElementById('trafficSave')&&!document.getElementById('trafficSave').disabled);
-   assert.equal(await page.$eval('#trafficMultiplier',n=>n.value),'2.5');
+   await page.click('button[onclick^="nodeMultiplierModal"]');
+   await page.$eval('#nodeMultiplier',n=>{n.value='2.5';});
+   const rateSaved=page.waitForResponse(r=>r.url().endsWith('/admin/api/servers/multiplier')&&r.request().method()==='PUT');
+   await page.click('#nodeMultiplierSave');assert.equal((await rateSaved).status(),200);
+   await page.waitForSelector('#modal.hidden');
+   await page.waitForFunction(()=>document.getElementById('content').textContent.includes('2.5 倍'));
    const button=await page.$('button[onclick^="nodeBandwidthModal"]');await button.click();
    await page.$eval('#bandwidthUpload',n=>{n.value='1.25';});await page.$eval('#bandwidthDownload',n=>{n.value='2.5';});
    const applied=page.waitForResponse(r=>r.url().endsWith('/admin/api/servers/bandwidth')&&r.request().method()==='PUT');

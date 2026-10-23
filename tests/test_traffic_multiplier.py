@@ -1,4 +1,5 @@
 import unittest
+import threading
 from unittest.mock import patch
 
 import server
@@ -63,3 +64,52 @@ class MultiplierTests(unittest.TestCase):
             with self.subTest(value=value),self.assertRaises(ValueError):server.update_traffic({'multiplier':value})
         self.manager.inbounds.assert_not_called()
         self.manager.ensure_meter.assert_not_called()
+
+    def test_different_rates_bill_each_node_and_settle_only_selected_server(self):
+        record=self.configure(total=10000)
+        record['remoteNodes'].append({'serverId':'server-b','inboundId':2,'port':8443,'status':'active','up':0,'down':0,'multiplierUnits':500})
+        first={'id':1,'port':4443,'up':10,'down':0}
+        second={'id':2,'port':8443,'up':10,'down':0}
+        self.manager.inbounds.side_effect=lambda sid: {'inbounds':[first if sid=='server-a' else second]}
+        server.set_node_multiplier({'serverId':'server-a','inboundId':1,'multiplier':2})
+        self.assertEqual(server.traffic_info(record)['used'],10)
+        self.manager.inbounds.assert_called_once_with('server-a')
+        first['up']=20
+        server.enforce_profile('clash')
+        self.assertEqual(server.traffic_info(record)['used'],35)
+        self.assertEqual(record['remoteNodes'][1]['multiplierUnits'],500)
+        server.PROFILES_CACHE=None
+        self.assertEqual(server.profile_record()['remoteNodes'][0]['multiplierUnits'],2000)
+
+    def test_offline_node_rate_and_foreign_binding_do_not_change_rates(self):
+        record=self.configure()
+        self.manager.inbounds.side_effect=ValueError('offline')
+        with self.assertRaisesRegex(ValueError,'结算失败'):
+            server.set_node_multiplier({'serverId':'server-a','inboundId':1,'multiplier':2})
+        self.assertNotIn('multiplierUnits',record['remoteNodes'][0])
+        with self.assertRaisesRegex(ValueError,'当前订阅'):
+            server.set_node_multiplier({'serverId':'other','inboundId':1,'multiplier':2})
+
+    def test_ordinary_save_does_not_ssh_or_replace_node_rates(self):
+        record=self.configure()
+        record['remoteNodes'][0]['multiplierUnits']=2500
+        self.manager.inbounds.side_effect=AssertionError('Save must not SSH')
+        self.manager.ensure_meter.side_effect=AssertionError('Save must not reprovision')
+        server.update_traffic({'enforce':True,'total':2000,'preserveUsage':True})
+        self.assertEqual(record['remoteNodes'][0]['multiplierUnits'],2500)
+        self.assertEqual(record['traffic']['total'],2000)
+
+    def test_quota_save_does_not_wait_for_background_network_lock(self):
+        self.configure()
+        held, release = threading.Event(), threading.Event()
+        def background():
+            with server.ENFORCEMENT_LOCK:
+                held.set();release.wait(3)
+        thread=threading.Thread(target=background);thread.start();held.wait(2)
+        try:
+            result=server.update_traffic({'enforce':True,'total':2000,'preserveUsage':True})
+            self.assertFalse(release.is_set())
+            self.assertTrue(thread.is_alive(), 'save must finish while the network lock is still held')
+            self.assertEqual(result['total'],2000)
+        finally:
+            release.set();thread.join(4)
