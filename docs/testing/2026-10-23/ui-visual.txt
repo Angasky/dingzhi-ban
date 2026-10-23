@@ -1,0 +1,12 @@
+high {"body":"rgb(7, 10, 19)","nav":"22px","panel":"rgb(12, 18, 32)"}
+low {"body":"rgb(11, 17, 32)","nav":"22px","panel":"rgb(18, 27, 44)"}
+pink {"body":"rgb(251, 247, 244)","nav":"22px","panel":"rgb(255, 253, 251)"}
+PASS: 42 page/theme combinations; no dark component leaked into pink controls
+PASS: prioritized multi-entry form in all three themes
+PASS: desktop, Android and Shadowrocket client links in all three themes
+PASS: existing Xray and sing-box are selectable in every theme without installation fields
+PASS: complete existing-panel URL and X-Panel credential labels in all themes
+PASS: choose server, browse inbounds and dedicated subscription import in all themes
+PASS: subscription multiplier and per-node bandwidth dialog in all three themes
+PASS: all three mobile themes and node dialogs fit 390px viewport
+page errors []

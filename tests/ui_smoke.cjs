@@ -6,12 +6,12 @@ const dom=new JSDOM(html,{url:'https://vpn.mxvv.cn/admin/',runScripts:'outside-o
 const w=dom.window;
 w.alert=()=>{}; w.confirm=()=>true; w.matchMedia=()=>({matches:false});
 const script=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]).join('\n').replace('void bootstrap();','');
-w.eval(script+'\nwindow.testUI={S,traffic,chainModal,chains,failoverModal,conversionRows,profileClientLinks,nativeApi:api,serverForm,remoteNodeForm,renderServers,testSniCandidates,setApi:fn=>api=fn};');
+w.eval(script+'\nwindow.testUI={S,traffic,nodeBandwidthModal,bandwidthLabel,chainModal,chains,failoverModal,conversionRows,profileClientLinks,nativeApi:api,chooseNodeServer,remoteNodeLinks,renderRemoteNodes,serverForm,remoteNodeForm,renderServers,testSniCandidates,setApi:fn=>api=fn};');
 const t=w.testUI,$=id=>w.document.getElementById(id);
 t.S.data={nodes:[{index:0,name:'entry',server:'198.51.100.1',config:{type:'ss',server:'198.51.100.1',port:443}},{index:1,name:'exit',server:'198.51.100.2',config:{type:'ss',server:'198.51.100.2',port:443}}],groups:[],rules:[],profile:{name:'test',traffic:{configured:false,bindings:[{name:'owned',port:443,serverId:'s',inboundId:1,status:'active'}]}}};
 t.S.servers=[{id:'native',name:'sing',host:'198.51.100.1',sshPort:22,sshUser:'root',installType:'sing-box',fingerprint:'SHA256:'+'a'.repeat(43)}];
 let requests=[];
-t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/servers')return {servers:t.S.servers};if(path==='/failovers')return {failovers:[]};if(path==='/server-chains')return {chains:[{name:"quote'chain",entry:'entry',exit:'exit'}]};throw Error('Captured '+path);});
+t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/servers')return opt?.method ? {server:{id:JSON.parse(opt.body).id}} : {servers:t.S.servers};if(path==='/servers/attach')return {message:'已有内核验证成功'};if(path==='/failovers')return {failovers:[]};if(path==='/server-chains')return {chains:[{name:"quote'chain",entry:'entry',exit:'exit'}]};throw Error('Captured '+path);});
 (async()=>{
  let actualHeaders;
  w.fetch=async(url,opt)=>{actualHeaders=opt.headers;return {ok:true,status:200,json:async()=>({formats:[]})};};
@@ -21,8 +21,32 @@ t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/servers')return
  $('content').innerHTML=converted;assert.equal(w.document.querySelectorAll('.subscription-row').length,1);assert($('content').textContent.includes('请先创建主备组'));assert($('content').textContent.includes('主备组'));assert(w.document.querySelector('a[href="/convert/test/v2rayng-ha"]'));
  t.traffic();assert($('trafficEnforce').checked);assert($('content').textContent.includes('owned'));
  t.serverForm('native');assert($('rsPanelPassword').disabled);assert(!$('rsPanelPassword').required);assert(!$('rsCoreBox').classList.contains('hidden'));
+ t.serverForm('',true);
+ for (const value of ['xray','sing-box']) {
+  const option=[...$('rsInstallType').options].find(x=>x.value===value);assert(!option.disabled);
+  $('rsInstallType').value=value;$('rsInstallType').onchange();
+  assert($('rsCoreBox').classList.contains('hidden'));assert($('rsCoreConfig').disabled);
+  assert($('rsPanelPassword').disabled);assert(!$('rsPanelPassword').required);
+  assert($('rsInstallNote').textContent.includes('不安装、不重启'));
+ }
+ t.S.servers.push({...t.S.servers[0],id:'existing-native',installType:'xray',connectionMode:'existing'});
+ t.serverForm('existing-native');await $('serverForm').onsubmit({preventDefault(){}});
+ const existingRequest=requests.find(r=>r[0]==='/servers' && r[1]?.method==='PUT');
+ assert.equal(JSON.parse(existingRequest[1].body).connectionMode,'existing');
+ assert.equal(JSON.parse(existingRequest[1].body).installType,'xray');assert.equal(JSON.parse(existingRequest[1].body).coreConfig,'');
+ assert(requests.some(r=>r[0]==='/servers/attach'));assert(!requests.some(r=>r[0]==='/servers/install'));
  t.S.servers.push({id:'xp',name:'X-Panel',host:'198.51.100.3',installType:'x-panel',connectionMode:'existing',panelUser:'admin'});
  t.serverForm('xp');assert.equal($('rsInstallType').value,'x-panel');assert(!$('rsPanelPassword').disabled);
+ assert($('rsPanelUserLabel').textContent.includes('X-Panel'));assert($('rsPanelPasswordLabel').textContent.includes('X-Panel'));
+ $('rsMode').value='url';$('rsMode').onchange();assert(!$('rsPanelAddressBox').classList.contains('hidden'));
+ assert($('rsDomainBox').classList.contains('hidden'));assert(!$('rsDomain').required);
+ $('rsPanelAddress').value='https://panel.example.com:13145/riben/';
+ t.S.servers.find(s=>s.id==='xp').fingerprint='SHA256:'+'a'.repeat(43);
+ t.serverForm('xp');$('rsMode').value='url';$('rsMode').onchange();$('rsPanelAddress').value='https://panel.example.com:13145/riben/';
+ await $('serverForm').onsubmit({preventDefault(){}});
+ const xpRequest=requests.filter(r=>r[0]==='/servers' && r[1]?.method==='PUT').map(r=>JSON.parse(r[1].body)).find(r=>r.id==='xp');
+ assert.equal(xpRequest.panelAddress,'https://panel.example.com:13145/riben/');assert.equal(xpRequest.domain,'');
+
  t.S.page='servers';t.renderServers();const manage=[...w.document.querySelectorAll('button')].filter(b=>b.textContent==='节点 / 中转');assert(manage.every(b=>!b.disabled));
  t.S.page='chains';await t.chainModal();$('chainMode').value='server';$('chainMode').onchange();assert(!$('chainServerFields').classList.contains('hidden'));
  $('chainName').value='test-server-chain';const submit=$('editForm').querySelector('button.primary');await $('editForm').onsubmit({preventDefault(){},submitter:submit});
@@ -39,6 +63,37 @@ t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/servers')return
  t.setApi(async(path,opt)=>({results:JSON.parse(opt.body).candidates.map(domain=>({domain,ok:true,latencyMs:20,tls:'TLSv1.3',alpn:'h2'}))}));
  $('rnSniList').value=Array.from({length:21},(_,i)=>`sni${i}.example.com`).join('\n');await t.testSniCandidates('native','rnSni','rnSniList','rnSniResults',$('rnSniTest'));
  const options=$('rnSniResults').querySelectorAll('[data-domain]');assert.equal(options.length,21);options[20].click();assert.equal($('rnSni').value,'sni20.example.com');
+ t.S.profile='clash';t.S.page='nodes';t.S.profiles=[{id:'clash',name:'test'}];
+ const remote={id:7,port:24443,enable:true,protocol:'shadowsocks',remark:'dedicated',shareLinks:['ss://server-source#dedicated']};
+ t.setApi(async(path,opt)=>{
+  requests.push([path,opt]);
+  if(path==='/servers')return {servers:t.S.servers};
+  if(path.startsWith('/servers/inbounds'))return {server:t.S.servers[0],inbounds:[remote]};
+  if(path==='/snapshot')return t.S.data;
+  if(path==='/servers/import')return {added:1,existing:0,bound:JSON.parse(opt.body).bind,enforcementEnabled:true};
+  throw Error(path);
+ });
+ await t.chooseNodeServer('browse');assert($('pickerServer'));await $('pickerOpen').onclick();
+ assert.equal(t.S.page,'serverNodes');assert($('content').textContent.includes('返回总控节点'));
+ t.S.data.profile.traffic.enforce=true;t.remoteNodeLinks(7);
+ assert($('remoteBindOnImport').checked);assert($('remoteDedicated').required);
+ $('remoteDedicated').checked=true;await $('remoteImportForm').onsubmit({preventDefault(){}});
+ const imported=JSON.parse(requests.filter(r=>r[0]==='/servers/import').pop()[1].body);
+ assert.equal(imported.inboundId,7);assert(imported.bind);assert(imported.confirmedDedicated);assert.deepEqual(imported.indices,[0]);
+ t.S.remoteRows=[{...remote,id:8,shareLinks:['ss://a','ss://b']}];t.remoteNodeLinks(8);assert($('remoteBindOnImport').disabled);
+ t.S.page='traffic';t.S.data.profile.traffic={configured:true,enforce:true,upload:0,download:0,total:10737418240,multiplier:2,bindings:[{serverId:'s',inboundId:1,port:24443,name:'owned',status:'active',bandwidth:{uploadKbps:1000,downloadKbps:2000}}]};
+ t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/snapshot')return t.S.data;if(path==='/profiles')return {profiles:t.S.profiles};if(path==='/traffic'||path==='/servers/bandwidth')return {ok:true};throw Error(path);});
+ t.traffic();assert.equal($('trafficMultiplier').value,'2');
+ $('trafficMultiplier').value='2.5';$('trafficForm').onsubmit({preventDefault(){}});await new Promise(r=>setTimeout(r,20));
+ const billed=JSON.parse(requests.filter(r=>r[0]==='/traffic'&&r[1]?.method==='PUT').pop()[1].body);
+ assert.equal(billed.multiplier,2.5);assert(billed.preserveUsage);
+ t.nodeBandwidthModal('s',1);assert.equal($('bandwidthUpload').value,'1');assert.equal($('bandwidthDownload').value,'2');
+ $('bandwidthUpload').value='1.5';$('nodeBandwidthForm').onsubmit({preventDefault(){}});await new Promise(r=>setTimeout(r,20));
+ const bwRequest=requests.filter(r=>r[0]==='/servers/bandwidth').pop();
+ assert.equal(bwRequest[1].headers['X-Profile'],'clash');assert.deepEqual(JSON.parse(bwRequest[1].body),{serverId:'s',inboundId:1,uploadMbps:1.5,downloadMbps:2});
+ t.nodeBandwidthModal('s',1);await $('bandwidthClear').onclick();
+ assert.equal(JSON.parse(requests.filter(r=>r[0]==='/servers/bandwidth').pop()[1].body).downloadMbps,null);
+ console.log('PASS: traffic multiplier submission and subscription-owned node bandwidth apply/clear');
  console.log('PASS: quota binding form, native/panel selection, native node controls, server-chain submission/escaping, TUIC template submission, batched SNI selection');
  dom.window.close();
 })().catch(e=>{console.error(e);dom.window.close();process.exitCode=1;});

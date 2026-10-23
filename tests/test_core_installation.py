@@ -35,7 +35,7 @@ class CoreInstallationTests(unittest.TestCase):
 
     def test_invalid_types_modes_and_config_rejected(self):
         for changes in ({"installType": "x-panel"}, {"installType": []},
-                        {"connectionMode": "existing"}, {"domain": "example.com"},
+                        {"connectionMode": "unsupported"}, {"domain": "example.com"},
                         {"coreConfig": "[]"}, {"coreConfig": "{"},
                         {"coreConfig": '{"inbounds":{}}'}, {"coreConfig": "x" * 131073}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):

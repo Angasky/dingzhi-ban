@@ -1,0 +1,14 @@
+test_limited_node_cannot_switch_tcp_to_udp_transport (test_workflow_regressions.BandwidthWorkflowRegressions.test_limited_node_cannot_switch_tcp_to_udp_transport) ... ok
+test_panel_meter_does_not_open_an_unused_ssh_connection (test_workflow_regressions.BandwidthWorkflowRegressions.test_panel_meter_does_not_open_an_unused_ssh_connection) ... ok
+test_repeated_delete_of_missing_node_does_not_call_panel_delete (test_workflow_regressions.BandwidthWorkflowRegressions.test_repeated_delete_of_missing_node_does_not_call_panel_delete) ... ok
+test_concurrent_sync_does_not_double_charge (test_workflow_regressions.QuotaWorkflowRegressions.test_concurrent_sync_does_not_double_charge) ... ok
+test_disconnect_failure_keeps_retrying_after_inbound_is_gone (test_workflow_regressions.QuotaWorkflowRegressions.test_disconnect_failure_keeps_retrying_after_inbound_is_gone) ... ok
+test_history_does_not_receive_live_counters_or_revocation (test_workflow_regressions.QuotaWorkflowRegressions.test_history_does_not_receive_live_counters_or_revocation) ... ok
+test_invalid_quota_is_rejected_before_remote_changes_or_settlement (test_workflow_regressions.QuotaWorkflowRegressions.test_invalid_quota_is_rejected_before_remote_changes_or_settlement) ... ok
+test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) ... ok
+test_negative_content_length_is_rejected_before_read (test_workflow_regressions.RequestBodyRegressions.test_negative_content_length_is_rejected_before_read) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.019s
+
+OK

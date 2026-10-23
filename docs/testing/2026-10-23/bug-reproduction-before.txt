@@ -1,0 +1,142 @@
+test_limited_node_cannot_switch_tcp_to_udp_transport (test_workflow_regressions.BandwidthWorkflowRegressions.test_limited_node_cannot_switch_tcp_to_udp_transport) ... FAIL
+test_repeated_delete_of_missing_node_does_not_call_panel_delete (test_workflow_regressions.BandwidthWorkflowRegressions.test_repeated_delete_of_missing_node_does_not_call_panel_delete) ... ERROR
+test_disconnect_failure_keeps_retrying_after_inbound_is_gone (test_workflow_regressions.QuotaWorkflowRegressions.test_disconnect_failure_keeps_retrying_after_inbound_is_gone) ... FAIL
+test_history_does_not_receive_live_counters_or_revocation (test_workflow_regressions.QuotaWorkflowRegressions.test_history_does_not_receive_live_counters_or_revocation) ... FAIL
+test_invalid_quota_is_rejected_before_remote_changes_or_settlement (test_workflow_regressions.QuotaWorkflowRegressions.test_invalid_quota_is_rejected_before_remote_changes_or_settlement) ... FAIL
+test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) ...
+  test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'[]') ... FAIL
+  test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'null') ... FAIL
+  test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'123') ... FAIL
+  test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'"hello"') ... FAIL
+test_negative_content_length_is_rejected_before_read (test_workflow_regressions.RequestBodyRegressions.test_negative_content_length_is_rejected_before_read) ... ERROR
+
+======================================================================
+ERROR: test_repeated_delete_of_missing_node_does_not_call_panel_delete (test_workflow_regressions.BandwidthWorkflowRegressions.test_repeated_delete_of_missing_node_does_not_call_panel_delete)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 73, in test_repeated_delete_of_missing_node_does_not_call_panel_delete
+    self.assertTrue(self.manager.delete_inbound(self.identity, 1)['deleted'])
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/mxioc-vpn-manager/remote_manager.py", line 1118, in delete_inbound
+    return self.with_panel(server_id, action)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1204, in _execute_mock_call
+    result = effect(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/mxioc-vpn-manager/tests/test_remote_manager.py", line 259, in <lambda>
+    return patch.object(self.manager, "with_panel", side_effect=lambda identity, action: action(api, copy.deepcopy(self.manager.record(identity))))
+                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/mxioc-vpn-manager/remote_manager.py", line 1102, in action
+    return remove(api, record)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/workspace/mxioc-vpn-manager/remote_manager.py", line 1080, in remove
+    api.request(f"panel/api/inbounds/del/{inbound_id}", {})
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 69, in fail_missing
+    raise ValueError('inbound not found')
+ValueError: inbound not found
+
+======================================================================
+ERROR: test_negative_content_length_is_rejected_before_read (test_workflow_regressions.RequestBodyRegressions.test_negative_content_length_is_rejected_before_read)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 87, in test_negative_content_length_is_rejected_before_read
+    handler.body()
+  File "/workspace/mxioc-vpn-manager/server.py", line 3004, in body
+    return json.loads(self.rfile.read(length) or b"{}")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 339, in loads
+    raise TypeError(f'the JSON object must be str, bytes or bytearray, '
+TypeError: the JSON object must be str, bytes or bytearray, not Mock
+
+======================================================================
+FAIL: test_limited_node_cannot_switch_tcp_to_udp_transport (test_workflow_regressions.BandwidthWorkflowRegressions.test_limited_node_cannot_switch_tcp_to_udp_transport)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 61, in test_limited_node_cannot_switch_tcp_to_udp_transport
+    with self.with_fake_api(api), self.assertRaisesRegex(ValueError, '限速'):
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_disconnect_failure_keeps_retrying_after_inbound_is_gone (test_workflow_regressions.QuotaWorkflowRegressions.test_disconnect_failure_keeps_retrying_after_inbound_is_gone)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 32, in test_disconnect_failure_keeps_retrying_after_inbound_is_gone
+    self.assertEqual(record['remoteNodes'][0]['status'], 'active', 'failed socket cleanup must stay retryable')
+AssertionError: 'missing' != 'active'
+- missing
++ active
+ : failed socket cleanup must stay retryable
+
+======================================================================
+FAIL: test_history_does_not_receive_live_counters_or_revocation (test_workflow_regressions.QuotaWorkflowRegressions.test_history_does_not_receive_live_counters_or_revocation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 44, in test_history_does_not_receive_live_counters_or_revocation
+    self.assertEqual((history['up'], history['down']), (777, 888))
+AssertionError: Tuples differ: (10, 20) != (777, 888)
+
+First differing element 0:
+10
+777
+
+- (10, 20)
++ (777, 888)
+
+======================================================================
+FAIL: test_invalid_quota_is_rejected_before_remote_changes_or_settlement (test_workflow_regressions.QuotaWorkflowRegressions.test_invalid_quota_is_rejected_before_remote_changes_or_settlement)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 22, in test_invalid_quota_is_rejected_before_remote_changes_or_settlement
+    self.manager.ensure_meter.assert_not_called()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 910, in assert_not_called
+    raise AssertionError(msg)
+AssertionError: Expected 'ensure_meter' to not have been called. Called 1 times.
+Calls: [call('server-a', 1)].
+
+======================================================================
+FAIL: test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'[]')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 92, in test_json_body_must_be_object
+    with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, 'JSON'):
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'null')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 92, in test_json_body_must_be_object
+    with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, 'JSON'):
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'123')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 92, in test_json_body_must_be_object
+    with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, 'JSON'):
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) (raw=b'"hello"')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 92, in test_json_body_must_be_object
+    with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, 'JSON'):
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.012s
+
+FAILED (failures=8, errors=2)

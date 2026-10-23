@@ -85,6 +85,64 @@ try{
   await page.evaluate(()=>closeModal());
  }
  console.log('PASS: desktop, Android and Shadowrocket client links in all three themes');
+ for (const theme of ['high','low','pink']) {
+  await page.evaluate(theme=>{setTheme(theme);serverForm('',true);},theme);
+  for (const kind of ['xray','sing-box']) {
+   const state=await page.evaluate(kind=>{
+    const select=document.getElementById('rsInstallType');
+    const option=[...select.options].find(o=>o.value===kind);
+    select.value=kind;select.onchange();
+    return {disabled:option.disabled,hidden:document.getElementById('rsCoreBox').classList.contains('hidden'),panelRequired:document.getElementById('rsPanelPassword').required,note:document.getElementById('rsInstallNote').textContent};
+   },kind);
+   assert(!state.disabled && state.hidden && !state.panelRequired);
+   assert(state.note.includes('不安装、不重启'));
+  }
+  await page.screenshot({path:path.join(captureDir,theme+'-existing-core.png'),fullPage:true});
+  await page.evaluate(()=>closeModal());
+ }
+ console.log('PASS: existing Xray and sing-box are selectable in every theme without installation fields');
+ for (const theme of ['high','low','pink']) {
+  await page.evaluate(theme=>{
+   setTheme(theme);serverForm('',true);
+   const type=document.getElementById('rsInstallType');type.value='x-panel';type.onchange();
+   document.getElementById('rsPanelAddress').value='https://panel.example.com:13145/riben/';
+  },theme);
+  assert.equal(await page.$eval('#rsMode',n=>n.value),'url');
+  assert(await page.$eval('#rsPanelUserLabel',n=>n.textContent.includes('X-Panel')));
+  assert(await page.$eval('#rsPanelPasswordLabel',n=>n.textContent.includes('X-Panel')));
+  assert(await page.$eval('#rsDomainBox',n=>n.classList.contains('hidden')));
+  assert(await page.$eval('#rsPanelAddress',n=>n.required && !n.disabled));
+  await page.screenshot({path:path.join(captureDir,theme+'-existing-panel-url.png'),fullPage:true});
+  await page.evaluate(()=>closeModal());
+ }
+ console.log('PASS: complete existing-panel URL and X-Panel credential labels in all themes');
+ for (const theme of ['high','low','pink']) {
+  await page.evaluate(async theme=>{setTheme(theme);await go('nodes');await chooseNodeServer('browse');},theme);
+  await page.waitForSelector('#pickerOpen');await page.click('#pickerOpen');
+  await page.waitForFunction(()=>S.page==='serverNodes' && document.getElementById('content').textContent.includes('返回总控节点'));
+  await page.evaluate(()=>{
+   S.remoteRows=[{id:1,port:24443,remark:'订阅专属 Reality',protocol:'vless',enable:true,up:1024,down:2048,shareLinks:['vless://example#demo']},
+    {id:2,port:443,remark:'共用入站',protocol:'vless',enable:true,shareLinks:['vless://a','vless://b']}];
+   renderRemoteNodes();remoteNodeLinks(1);
+   document.getElementById('remoteBindOnImport').checked=true;document.getElementById('remoteBindOnImport').onchange();
+  });
+  assert(await page.$eval('#remoteDedicated',n=>n.required));
+  await page.screenshot({path:path.join(captureDir,theme+'-server-node-import.png'),fullPage:true});
+  await page.evaluate(()=>closeModal());
+ }
+ console.log('PASS: choose server, browse inbounds and dedicated subscription import in all themes');
+ for (const theme of ['high','low','pink']) {
+  await page.evaluate(async theme=>{
+   setTheme(theme);S.data.profile.traffic={configured:true,enforce:true,upload:1024,download:2048,total:10737418240,used:3072,remaining:10737415168,percent:0,multiplier:2,rawUsed:1536,bindings:[{serverId:'demo',inboundId:1,port:24443,name:'订阅专属节点',status:'active',bandwidth:{uploadKbps:1000,downloadKbps:2000}}]};
+   await go('traffic');nodeBandwidthModal('demo',1);
+  },theme);
+  assert.equal(await page.$eval('#trafficMultiplier',n=>n.value),'2');
+  assert.equal(await page.$eval('#bandwidthUpload',n=>n.value),'1');
+  assert.equal(await page.$eval('#bandwidthDownload',n=>n.value),'2');
+  await page.screenshot({path:path.join(captureDir,theme+'-node-bandwidth.png'),fullPage:true});
+  await page.evaluate(()=>closeModal());
+ }
+ console.log('PASS: subscription multiplier and per-node bandwidth dialog in all three themes');
  await page.setViewport({width:390,height:844,deviceScaleFactor:1});
  for (const theme of ['high','low','pink']) {
   await page.evaluate(async theme=>{setTheme(theme);await go('monitoring');},theme);
@@ -95,6 +153,12 @@ try{
   await page.evaluate(()=>nodeModal(0));
   const bounds=await page.$eval('.modalbox',n=>({width:n.getBoundingClientRect().width,screen:window.innerWidth}));
   assert(bounds.width<bounds.screen,'Mobile dialog too wide: '+theme);
+  await page.evaluate(()=>closeModal());
+  await page.evaluate(async()=>{await go('traffic');nodeBandwidthModal('demo',1);});
+  const bandwidthBounds=await page.$eval('.modalbox',n=>({width:n.getBoundingClientRect().width,screen:window.innerWidth}));
+  assert(bandwidthBounds.width<bandwidthBounds.screen,'Mobile bandwidth dialog too wide: '+theme);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Bandwidth page overflows mobile: '+theme);
+  await page.screenshot({path:path.join(captureDir,theme+'-mobile-bandwidth.png'),fullPage:true});
   await page.evaluate(()=>closeModal());
  }
  console.log('PASS: all three mobile themes and node dialogs fit 390px viewport');

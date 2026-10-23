@@ -1,0 +1,8 @@
+----------------------------------------------------------------------
+Ran 181 tests in 103.735s
+
+OK
+PASS isolated nftables: {"upload_1Mbps": 0.973, "download_2Mbps": 1.944, "other_port_unlimited": 4.0, "IPv6_1Mbps": 0.955, "after_clear": 4.0}
+PASS real browser/API: cookie login, 3 theme quota edits, bandwidth apply/clear, reload session, logout
+PASS native Mihomo: primary -> backup -> primary; same egress; all down fails closed
+PASS Xray: primary -> backup 1 -> backup 2 -> primary; common egress; all down fails closed

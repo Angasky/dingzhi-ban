@@ -2011,16 +2011,16 @@ async function servers() {
 function renderServers() {
   const q = S.filters.servers || '';
   const page = tableSlice(S.servers.filter(s => `${s.name} ${s.host} ${s.domain}`.toLowerCase().includes(q.toLowerCase())), 'servers');
-  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>远端服务器</h3><p class="muted">可选择 3x-ui 面板、独立 Xray 或 sing-box，也可接入现有 X-ui。SSH 账号须为 root 或具有 sudo 权限。</p></div><div class="toolbar"><button class="btn" onclick="serverForm('',true)">添加已安装面板的服务器</button><button class="btn primary" onclick="serverForm()">＋ 添加服务器</button></div></div>
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div class="profile-summary"><h3>远端服务器</h3><p class="muted">可选择 3x-ui 面板、独立 Xray 或 sing-box，也可接入现有 X-ui。SSH 账号须为 root 或具有 sudo 权限。</p></div><div class="toolbar"><button class="btn" onclick="serverForm('',true)">接入已有面板 / 内核</button><button class="btn primary" onclick="serverForm()">＋ 添加服务器</button></div></div>
     <div class="toolbar profiles-toolbar"><input id="search" aria-label="搜索服务器" placeholder="搜索名称、IP 或域名…" value="${esc(q)}"></div>
     <div class="profile-grid">${page.rows.map(s => {
       const id = encodeURIComponent(s.id), url = panelLink(s.panelUrl), running = s.job?.status === 'running';
       return `<article class="profile-card"><div class="profile-card-head"><div><h4>${esc(s.name)}</h4><div class="profile-id">${esc(s.sshUser)}@${esc(s.host)}:${s.sshPort}</div></div><span class="pill ${s.job?.status === 'failed' ? 'reject' : ''}">${s.connectionMode === 'existing' ? (s.existingVerifiedAt ? '已接入' : '待验证') : remoteStatus(s.job?.status)}</span></div>
-      <div class="profile-usage">${s.connectionMode === 'existing' ? '接入现有面板' : s.domain ? '绑定域名：' + esc(s.domain) : '无域名自动安装'}<br>安装类型：${esc(s.installType || '3x-ui')}${panelType(s.installType) ? ' · 面板账号：' + esc(s.panelUser) : ' · 支持模板节点 / 中转'}${s.job ? '<br>阶段：' + esc(remoteStage(s.job.stage)) : ''}</div>
+      <div class="profile-usage">${s.connectionMode === 'existing' ? (panelType(s.installType) ? '接入现有面板' : '接入已有内核') : s.domain ? '绑定域名：' + esc(s.domain) : '无域名自动安装'}<br>安装类型：${esc(s.installType || '3x-ui')}${panelType(s.installType) ? ' · 面板账号：' + esc(s.panelUser) : ' · 支持模板节点 / 中转'}${s.job ? '<br>阶段：' + esc(remoteStage(s.job.stage)) : ''}</div>
       ${s.lastError ? `<div class="error">${esc(s.lastError)}</div>` : ''}
       ${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开面板 ↗</a><code style="overflow-wrap:anywhere;white-space:normal">${esc(url)}</code>` : ''}
       <div class="toolbar"><button class="btn small primary" onclick="openRemoteNodes('${id}')" ${running ? 'disabled' : ''}>节点 / 中转</button><button class="btn small" onclick="serverForm('${id}')" ${running ? 'disabled' : ''}>连接设置</button><button class="btn small" onclick="openHostMonitor('${id}')">硬件监控</button><button class="btn small" onclick="serverTest('${id}',this)">测试 SSH</button></div>
-      <div class="toolbar profile-actions">${s.connectionMode === 'existing' ? `<button class="btn small" onclick="serverAttach('${id}',this)">验证现有面板</button>` : `<button class="btn small" onclick="serverInstall('${id}')" ${running ? 'disabled' : ''}>${s.job?.status === 'failed' || s.job?.status === 'interrupted' ? '重新安装 / 重试' : '安装 / 更新'}</button>`}
+      <div class="toolbar profile-actions">${s.connectionMode === 'existing' ? `<button class="btn small" onclick="serverAttach('${id}',this)">${panelType(s.installType) ? '验证现有面板' : '验证已有内核'}</button>` : `<button class="btn small" onclick="serverInstall('${id}')" ${running ? 'disabled' : ''}>${s.job?.status === 'failed' || s.job?.status === 'interrupted' ? '重新安装 / 重试' : '安装 / 更新'}</button>`}
       ${s.job ? `<button class="btn small" onclick="showServerJob('${encodeURIComponent(s.job.id)}')">安装日志</button>` : ''}
       <button class="btn small" onclick="serverDiagnose('${id}')">读取诊断</button><button class="btn small danger" onclick="serverRemove('${id}')" ${running ? 'disabled' : ''}>移除管理</button></div></article>`;
     }).join('') || '<div class="empty">尚未添加服务器，或没有匹配结果。</div>'}</div>${pagination(page)}</section>`;
@@ -2030,7 +2030,7 @@ function renderServers() {
 function serverForm(encoded = '', existing = false) {
   const s = S.servers.find(x => x.id === decodeURIComponent(encoded)) || {};
   existing = s.id ? s.connectionMode === 'existing' : existing;
-  openModal(s.id ? '服务器连接设置' : existing ? '添加已安装面板的服务器' : '添加服务器', `<form id="serverForm"><div class="grid">
+  openModal(s.id ? '服务器连接设置' : existing ? '接入已有面板 / 内核' : '添加服务器', `<form id="serverForm"><div class="grid">
     <div><label for="rsName">服务器名称</label><input id="rsName" required maxlength="80" value="${esc(s.name || '')}" placeholder="例如 香港入口"></div>
     <div><label for="rsHost">服务器 IP</label><input id="rsHost" required value="${esc(s.host || '')}" placeholder="IPv4 或 IPv6"></div>
     <div><label for="rsPort">SSH 端口</label><input id="rsPort" type="number" min="1" max="65535" required value="${s.sshPort || 22}"></div>
@@ -2038,24 +2038,36 @@ function serverForm(encoded = '', existing = false) {
     <div class="span2"><label for="rsPassword">SSH 密码${s.id ? '（留空保留）' : ''}</label><input id="rsPassword" type="password" autocomplete="new-password" ${s.id ? '' : 'required'}><p class="hint">非 root 账号会使用此密码执行 sudo。密码加密保存在总面板服务器，不会回显。</p></div>
     <div class="span2"><div class="toolbar"><button id="rsProbe" type="button" class="btn">检测 SSH 主机指纹</button><code id="rsFingerprint" style="overflow-wrap:anywhere;white-space:normal">${esc(s.fingerprint || '尚未检测')}</code></div>
     <label class="inlinecheck"><input id="rsTrust" type="checkbox" ${s.fingerprint ? 'checked' : ''} required>我已核对该 SSH 指纹属于目标服务器</label></div>
-    <div class="span2"><label for="rsInstallType">安装类型</label><select id="rsInstallType" ><option value="3x-ui">3x-ui 面板（含 Xray，支持节点 / 中转）</option>${existing ? '<option value="x-ui">现有 X-ui</option><option value="x-panel">现有 X-Panel（xeefei/X-Panel）</option>' : ''}<option value="xray" ${existing ? 'disabled' : ''}>独立 Xray 内核</option><option value="sing-box" ${existing ? 'disabled' : ''}>独立 sing-box 内核</option></select></div>
+    <div class="span2"><label for="rsInstallType">${existing ? '已有软件类型' : '安装类型'}</label><select id="rsInstallType" ><option value="3x-ui">3x-ui 面板（含 Xray，支持节点 / 中转）</option>${existing ? '<option value="x-ui">现有 X-ui</option><option value="x-panel">现有 X-Panel（xeefei/X-Panel）</option>' : ''}<option value="xray">独立 Xray 内核</option><option value="sing-box">独立 sing-box 内核</option></select></div>
     <div id="rsCoreBox" class="span2 hidden"><label for="rsCoreConfig">内核 JSON 配置（可选）</label><textarea id="rsCoreConfig" spellcheck="false" placeholder='{"inbounds": [], "outbounds": []}'></textarea><p class="hint">配置加密保存且不回显。留空保留已有配置；首次安装使用官方默认配置，不会自动创建可用节点。填写完整配置后，远端校验通过才会应用，服务启动失败会尝试恢复原配置。独立内核要求 systemd，域名及 TLS 在 JSON 中配置。${s.hasCoreConfig ? '已保存配置；留空会在安装时继续使用该配置。' : ''}</p><label class="inlinecheck"><input id="rsClearCoreConfig" type="checkbox">清除本面板保存的配置，下次安装保留远端配置</label></div>
-    <div><label for="rsMode">${existing ? '现有面板访问方式' : '安装模式'}</label><select id="rsMode"><option value="auto">${existing ? '服务器 IP' : '无域名：自动安装'}</option><option value="domain">${existing ? '现有面板域名' : '绑定域名并申请证书'}</option></select></div>
+    <div><label for="rsMode">${existing ? '现有面板访问方式' : '安装模式'}</label><select id="rsMode"><option value="auto">${existing ? '通过 SSH 自动读取面板地址' : '无域名：自动安装'}</option><option value="${existing ? 'url' : 'domain'}">${existing ? '填写已有面板完整地址' : '绑定域名并申请证书'}</option></select></div>
     <div id="rsDomainBox"><label for="rsDomain">绑定域名</label><input id="rsDomain" value="${esc(s.domain || '')}" placeholder="panel.example.com"></div>
-    <div><label for="rsPanelUser">${existing ? '现有 X-ui' : '预设 3x-ui'} 面板账号</label><input id="rsPanelUser" required minlength="${existing ? 1 : 3}" maxlength="64" autocomplete="off" value="${esc(s.panelUser || 'admin')}"></div>
-    <div><label for="rsPanelPassword">${existing ? '现有 X-ui' : '预设 3x-ui'} 面板密码${s.id ? '（留空保留）' : ''}</label><input id="rsPanelPassword" type="password" minlength="${existing ? 1 : 12}" autocomplete="new-password" ${s.id ? '' : 'required'}></div>
-  </div><div id="rsInstallNote" class="note">${existing ? '仅通过 SSH 读取已安装面板的端口、路径和证书配置，验证现有账号及入站接口；不运行安装脚本，不修改面板账号、密码或节点。不兼容的旧版本将显示具体错误。' : '域名模式需先将域名解析到该服务器，并允许证书验证使用的 80 端口。无域名模式会返回 IP 加随机端口的 HTTP 面板地址；总面板管理接口始终走 SSH 隧道。'}</div>
+    <div id="rsPanelAddressBox" class="span2 hidden"><label for="rsPanelAddress">已有面板完整地址</label><input id="rsPanelAddress" type="url" maxlength="2048" value="${esc(s.panelAddress || '')}" placeholder="https://panel.example.com:13145/riben/"><p class="hint">直接粘贴已有面板的登录地址，包含 http/https、端口和访问路径，不含账号密码或查询参数。API 经 SSH 连接该服务器本机的对应端口；若域名经过 CDN 或异机反代，应选择自动读取或填写这台服务器可用的原站地址。</p></div>
+    <div><label id="rsPanelUserLabel" for="rsPanelUser">${existing ? '现有 X-ui' : '预设 3x-ui'} 面板账号</label><input id="rsPanelUser" required minlength="${existing ? 1 : 3}" maxlength="64" autocomplete="off" value="${esc(s.panelUser || 'admin')}"></div>
+    <div><label id="rsPanelPasswordLabel" for="rsPanelPassword">${existing ? '现有 X-ui' : '预设 3x-ui'} 面板密码${s.id ? '（留空保留）' : ''}</label><input id="rsPanelPassword" type="password" minlength="${existing ? 1 : 12}" autocomplete="new-password" ${s.id ? '' : 'required'}></div>
+  </div><div id="rsInstallNote" class="note">${existing ? '填写已有面板完整地址，或通过 SSH 自动读取。填写完整地址时，按该地址的协议、端口和路径，经 SSH 隧道验证面板账号与接口；SSH 同时用于服务器监控和转发管理。接入不安装、不申请证书、不修改面板账号或节点。' : '域名模式需先将域名解析到该服务器，并允许证书验证使用的 80 端口。无域名模式会返回 IP 加随机端口的 HTTP 面板地址；总面板管理接口始终走 SSH 隧道。'}</div>
   <div id="rsError" class="error" role="alert"></div><button id="rsSave" class="btn primary">保存服务器</button></form>`);
   let pin = s.fingerprint || '';
   const form = $('serverForm'), stillOpen = () => $('serverForm') === form && !$('modal').classList.contains('hidden');
-  $('rsMode').value = s.domain ? 'domain' : 'auto';
-  const mode = () => { const bound = $('rsMode').value === 'domain'; $('rsDomainBox').classList.toggle('hidden', !bound); $('rsDomain').required = bound; };
+  $('rsMode').value = existing ? (s.panelAddress || !s.id ? 'url' : 'auto') : (s.domain ? 'domain' : 'auto');
+  const mode = () => {
+    const core = !panelType(val('rsInstallType'));
+    const bound = !existing && !core && val('rsMode') === 'domain';
+    const explicit = existing && !core && val('rsMode') === 'url';
+    $('rsDomainBox').classList.toggle('hidden', !bound); $('rsDomain').required = bound; $('rsDomain').disabled = existing || core;
+    $('rsPanelAddressBox').classList.toggle('hidden', !explicit); $('rsPanelAddress').required = explicit; $('rsPanelAddress').disabled = !explicit;
+  };
   $('rsInstallType').value = s.installType || '3x-ui';
   const panelNote = $('rsInstallNote').textContent;
   const software = () => {
     const core = !panelType($('rsInstallType').value);
-    $('rsCoreBox').classList.toggle('hidden', !core);
-    $('rsInstallNote').textContent = core ? '将使用官方安装器安装独立内核，不提供 Web 面板。安装会重启服务，请检查配置中的端口是否与已有软件冲突。可在服务器节点页面创建模板节点和中转。' : panelNote;
+    const title = {'3x-ui':'3x-ui','x-ui':'X-ui','x-panel':'X-Panel'}[val('rsInstallType')] || '';
+    $('rsPanelUserLabel').textContent = `${existing ? '现有' : '预设'} ${title} 面板账号`;
+    $('rsPanelPasswordLabel').textContent = `${existing ? '现有' : '预设'} ${title} 面板密码${s.id ? '（留空保留）' : ''}`;
+    $('rsCoreBox').classList.toggle('hidden', !core || existing);
+    $('rsInstallNote').textContent = core ? (existing
+      ? '通过 SSH 读取已有内核配置，并验证内核与 systemd 服务，不安装、不重启、不修改远端配置。默认位置：Xray /usr/local/bin/xray、/usr/local/etc/xray/config.json；sing-box /usr/bin/sing-box、/etc/sing-box/config.json。验证成功后可创建总控受管节点，原有未受管节点不会自动导入。'
+      : '将使用官方安装器安装独立内核，不提供 Web 面板。安装会重启服务，请检查配置中的端口是否与已有软件冲突。可在服务器节点页面创建模板节点和中转。') : panelNote;
     ['rsPanelUser', 'rsPanelPassword', 'rsMode'].forEach(id => {
       $(id).parentElement.classList.toggle('hidden', core);
       $(id).disabled = core;
@@ -2063,6 +2075,7 @@ function serverForm(encoded = '', existing = false) {
     $('rsPanelUser').required = !core;
     $('rsPanelPassword').required = !core && !s.id;
     if (core) $('rsMode').value = 'auto';
+    $('rsCoreConfig').disabled = $('rsClearCoreConfig').disabled = core && existing;
     mode();
   };
   software(); $('rsInstallType').onchange = software; $('rsMode').onchange = mode;
@@ -2083,7 +2096,7 @@ function serverForm(encoded = '', existing = false) {
     if (!pin || !$('rsTrust').checked) return $('rsError').textContent = '请先检测并核对 SSH 主机指纹';
     $('rsSave').disabled = true;
     const payload = {id:s.id, name:val('rsName'),host:val('rsHost'),sshPort:val('rsPort'),sshUser:val('rsUser'),sshPassword:$('rsPassword').value,
-      installType:val('rsInstallType'),coreConfig:$('rsCoreConfig').value,clearCoreConfig:$('rsClearCoreConfig').checked,fingerprint:pin,domain:$('rsMode').value === 'domain' ? val('rsDomain') : '',panelUser:val('rsPanelUser'),panelPassword:$('rsPanelPassword').value,connectionMode:existing ? 'existing' : 'install'};
+      installType:val('rsInstallType'),coreConfig:existing ? '' : $('rsCoreConfig').value,clearCoreConfig:!existing && $('rsClearCoreConfig').checked,fingerprint:pin,domain:existing ? (panelType(val('rsInstallType')) ? s.domain || '' : '') : (val('rsMode') === 'domain' ? val('rsDomain') : ''),panelAddress:existing && panelType(val('rsInstallType')) && val('rsMode') === 'url' ? val('rsPanelAddress') : '',panelUser:val('rsPanelUser'),panelPassword:$('rsPanelPassword').value,connectionMode:existing ? 'existing' : 'install'};
     try {
       const saved = await api('/servers', jsonOpt(s.id ? 'PUT' : 'POST', payload));
       s.id = saved.server.id;
@@ -2153,6 +2166,33 @@ async function serverRemove(encoded) {
   catch (error) { alert(error.message); }
 }
 
+async function chooseNodeServer(action = 'browse') {
+  const profile = S.profile;
+  openModal('选择节点服务器', '<div id="nodeServerPicker">正在读取服务器列表…</div>');
+  const target = $('nodeServerPicker');
+  try {
+    const data = await api('/servers');
+    if (!target?.isConnected || S.profile !== profile) return;
+    const list = data.servers || [];
+    if (!list.length) { target.innerHTML = '<p>尚未添加服务器，请先到服务器管理登记服务器。</p><button class="btn" id="pickerAddServer">前往服务器管理</button>'; $('pickerAddServer').onclick = () => {closeModal();void go('servers');}; return; }
+    target.innerHTML = `<p class="hint">当前订阅：${esc(S.data?.profile?.name || '')}。选择服务器后可创建模板节点，或查看并导入已有入站。独立内核目前仅显示总控创建的入站。</p><label for="pickerServer">服务器</label><select id="pickerServer">${list.map(s=>`<option value="${esc(s.id)}" ${s.job?.status === 'running' ? 'disabled' : ''}>${esc(s.name)} · ${esc(s.host)} · ${esc(s.installType || '3x-ui')}${s.job?.status === 'running' ? '（安装中）' : ''}</option>`).join('')}</select><div id="pickerError" class="error"></div><button class="btn primary" id="pickerOpen">${action === 'create' ? '在此服务器创建节点' : '查看服务器已有节点'}</button>`;
+    $('pickerOpen').onclick = async () => {
+      const button = $('pickerOpen'), id = val('pickerServer');
+      if (!id || S.profile !== profile) return $('pickerError').textContent = '请选择服务器，并确认当前订阅未切换';
+      button.disabled = true;
+      try {
+        const remote = await api('/servers/inbounds?id=' + encodeURIComponent(id));
+        if (!target.isConnected || S.profile !== profile) return;
+        S.serverId = id; S.remoteServer = remote.server; S.remoteRows = remote.inbounds; S.remoteLoaded = true;
+        S.filters.remoteNodes = ''; S.tablePages.serverNodes = 1;
+        closeModal(); await go('serverNodes');
+        if (action === 'create') remoteNodeForm(false);
+      } catch (error) { if ($('pickerError')) $('pickerError').textContent = error.message; }
+      finally { if (button.isConnected) button.disabled = false; }
+    };
+  } catch (error) { if (target?.isConnected) target.textContent = error.message; }
+}
+
 async function openRemoteNodes(encoded) {
   S.serverId = decodeURIComponent(encoded); S.remoteLoaded = false; S.filters.remoteNodes = ''; S.tablePages.serverNodes = 1;
   await go('serverNodes');
@@ -2169,14 +2209,21 @@ async function serverNodes(force = false) {
   renderRemoteNodes();
 }
 
+function sharedRemoteInbound(row) {
+  try {
+    const settings = typeof row.settings === 'string' ? JSON.parse(row.settings) : row.settings || {};
+    return (row.shareLinks || []).length > 1 || (settings.clients || []).length > 1;
+  } catch (_) { return true; }
+}
+
 function renderRemoteNodes() {
   const q = S.filters.remoteNodes || '', s = S.remoteServer;
   const page = tableSlice(S.remoteRows.filter(x => `${x.remark} ${x.protocol} ${x.port}`.toLowerCase().includes(q.toLowerCase())), 'serverNodes');
-  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>${esc(s.name)} · ${esc(s.host)}</h3><p class="muted">${esc(s.installType || '3x-ui')} · 新建入站自动归属当前订阅。独立内核仅展示总控创建的入站。</p></div><div class="toolbar"><button class="btn" onclick="go('servers')">返回服务器</button><button class="btn primary" onclick="remoteNodeForm(false)">＋ 添加节点</button><button class="btn primary" onclick="remoteNodeForm(true)">＋ 添加中转</button></div></div>
+  $('content').innerHTML = `<section class="panel"><div class="panel-head"><div><h3>${esc(s.name)} · ${esc(s.host)}</h3><p class="muted">${esc(s.installType || '3x-ui')} · 新建入站自动归属当前订阅。独立内核仅展示总控创建的入站。</p></div><div class="toolbar"><button class="btn" onclick="go('nodes')">返回总控节点</button><button class="btn" onclick="chooseNodeServer()">切换服务器</button><button class="btn" onclick="go('traffic')">流量与有效期</button><button class="btn primary" onclick="remoteNodeForm(false)">＋ 添加节点</button><button class="btn primary" onclick="remoteNodeForm(true)">＋ 添加中转</button></div></div>
     <div class="toolbar"><input id="search" aria-label="搜索远端节点" placeholder="搜索节点名称、协议、端口…" value="${esc(q)}"></div>
-    <div class="tablewrap"><table><thead><tr><th>ID</th><th>名称</th><th>协议 / 端口</th><th>状态</th><th>上传 / 下载</th><th>操作</th></tr></thead><tbody>
-    ${page.rows.map(x => `<tr><td>${x.id}</td><td>${esc(x.remark)}</td><td><code>${esc(x.protocol)} : ${x.port}</code></td><td>${x.enable ? '启用' : '停用'}</td><td>${formatBytes(x.up || 0)} / ${formatBytes(x.down || 0)}</td><td>
-      <button class="btn small" onclick="remoteNodeEdit(${x.id})">编辑</button><button class="btn small" onclick="remoteNodeToggle(${x.id})">${x.enable ? '停用' : '启用'}</button><button class="btn small" onclick="bindRemoteNode(${x.id})">绑定当前订阅</button><button class="btn small" onclick="remoteNodeLinks(${x.id})" ${!x.shareLinks?.length ? 'disabled' : ''}>链接 / 导入</button><button class="btn small danger" onclick="remoteNodeDelete(${x.id})">删除</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无匹配的远端入站</td></tr>'}
+    <div class="tablewrap"><table><thead><tr><th>ID</th><th>名称</th><th>协议 / 端口</th><th>状态</th><th>上传 / 下载</th><th>订阅联动</th><th>操作</th></tr></thead><tbody>
+    ${page.rows.map(x => `<tr><td>${x.id}</td><td>${esc(x.remark)}</td><td><code>${esc(x.protocol)} : ${x.port}</code></td><td>${x.enable ? '启用' : '停用'}</td><td>${formatBytes(x.up || 0)} / ${formatBytes(x.down || 0)}</td><td>${(S.data?.profile?.traffic?.bindings || []).some(b=>b.serverId===S.serverId && b.inboundId===x.id && b.status==='active') ? '<span class="pill">已绑定当前订阅</span>' : '<span class="muted">未绑定当前订阅</span>'}</td><td>
+      <button class="btn small" onclick="remoteNodeEdit(${x.id})">编辑</button><button class="btn small" onclick="remoteNodeToggle(${x.id})">${x.enable ? '停用' : '启用'}</button><button class="btn small" onclick="bindRemoteNode(${x.id})" ${sharedRemoteInbound(x) ? 'disabled title="共用入站请新建专属节点后绑定"' : ''}>绑定当前订阅</button>${(S.data?.profile?.traffic?.bindings || []).some(b=>b.serverId===S.serverId && b.inboundId===x.id && b.status==='active') ? `<button class="btn small" onclick="nodeBandwidthModal('${encodeURIComponent(S.serverId).replace(/'/g,'%27')}',${x.id})">节点限速</button>` : ''}<button class="btn small" onclick="remoteNodeLinks(${x.id})" ${!x.shareLinks?.length ? 'disabled' : ''}>链接 / 导入</button><button class="btn small danger" onclick="remoteNodeDelete(${x.id})">删除</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">暂无匹配的远端入站</td></tr>'}
     </tbody></table></div>${pagination(page)}</section>`;
   bindSearch('remoteNodes', renderRemoteNodes);
 }
@@ -2185,7 +2232,7 @@ function remoteNodeForm(relay) {
   openModal(relay ? '添加服务器中转' : '添加服务器节点', `<form id="remoteNodeForm"><div class="grid">
     <div><label for="rnName">节点名称</label><input id="rnName" required maxlength="100" placeholder="例如 香港中转"></div>
     <div><label for="rnPort">监听端口</label><input id="rnPort" type="number" min="1" max="65535" required value="443"></div>
-    ${relay ? '' : '<div class="span2"><label for="rnTemplate">节点模板</label><select id="rnTemplate"><option value="vless-reality">VLESS + Reality / Vision（免证书）</option><option value="vmess-tcp">VMess + TCP</option><option value="shadowsocks">Shadowsocks AES-128-GCM</option><option value="trojan-tls">Trojan + TLS（需远端证书）</option><option value="vless-ws-tls">VLESS + WebSocket + TLS（需远端证书）</option></select></div>'}
+    ${relay ? '' : '<div class="span2"><label for="rnTemplate">节点模板</label><select id="rnTemplate"><option value="vless-reality">VLESS + Reality / Vision（免证书）</option><option value="vmess-tcp">VMess + TCP</option><option value="shadowsocks">Shadowsocks AES-128-GCM</option><option value="trojan-tls">Trojan + TLS（需远端证书）</option><option value="vless-ws-tls">VLESS + WebSocket + TLS（需远端证书）</option></select><p class="hint">模板按所选服务器内核提供。新建入站自动绑定当前订阅；流量倍率、有效期和节点限速可在“流量与有效期”管理。</p></div>'}
     <div class="span2"><label for="rnSni">Reality 伪装域名</label><input id="rnSni" value="www.microsoft.com" required><p class="hint">仅用于 Reality 模板，应填写该服务器可访问、支持 TLS 的域名。</p></div>
     ${relay ? '' : '<div id="rnTlsFields" class="span2 hidden"><div class="grid"><div><label for="rnCert">远端证书绝对路径</label><input id="rnCert" placeholder="/etc/ssl/certs/server.pem"></div><div><label for="rnKey">远端私钥绝对路径</label><input id="rnKey" placeholder="/etc/ssl/private/server.key"></div><div><label for="rnPath">WebSocket 路径</label><input id="rnPath" value="/vpn"></div></div><p class="hint">总控不回传证书私钥；证书必须已存在于远端并允许内核服务账号读取。</p></div>'}
     <div class="span2"><label for="rnSniList">候选 SNI（每行一个，最多 20 个）</label><textarea id="rnSniList">${esc(sniCandidates().join('\n'))}</textarea><button id="rnSniTest" type="button" class="btn">从目标服务器测试 TLS 1.3 延迟</button><div id="rnSniResults"></div></div>
@@ -2208,7 +2255,7 @@ function remoteNodeForm(relay) {
       closeModal(); S.remoteLoaded = false;
       if (S.page === 'serverNodes' && S.serverId === serverId) await serverNodes();
       if (autoImport && data.shareLinks?.length && S.profile === profile) {
-        try { await importRemoteLinks(data.shareLinks); } catch (error) { return alert('远端节点已创建，但订阅导入失败：'+error.message+'。请从“链接 / 导入”重试导入，不要重复创建。'); }
+        try { await importRemoteLinks(data.shareLinks, {serverId, inboundId:data.inbound.id}); } catch (error) { return alert('远端节点已创建，但订阅导入失败：'+error.message+'。请从“链接 / 导入”重试导入，不要重复创建。'); }
       }
       notice('远端'+(relay ? '中转' : '节点')+'已创建'+(autoImport && S.profile !== profile ? '；当前订阅已切换，未自动导入' : autoImport && !data.shareLinks?.length ? '；未返回兼容链接，请在远端面板核对后导入' : ''));
     } catch (error) { if (created) alert('远端节点已创建，但刷新列表失败：'+error.message+'。请刷新确认，勿重复创建。'); else if ($('remoteError')) { $('remoteError').textContent = error.message; $('rnSave').disabled = false; } else alert(error.message); }
@@ -2247,7 +2294,7 @@ async function testSniCandidates(serverId, targetId, candidatesId, resultsId, bu
 
 async function bindRemoteNode(id) {
   if (!confirm('将整个入站绑定当前订阅？请确认此入站仅供该订阅使用；到期或用尽流量时会删除整个入站，不能与其他用户共用。')) return;
-  try { await api('/servers/bind', jsonOpt('POST', {serverId: S.serverId, inboundId: id})); notice('已绑定当前订阅，可在流量与到期页面启用强制限制'); }
+  try { await api('/servers/bind', jsonOpt('POST', {serverId: S.serverId, inboundId: id})); await reload(false); if (S.page === 'serverNodes') renderRemoteNodes(); notice('已绑定当前订阅，可在流量与到期页面启用强制限制'); }
   catch (error) { alert(error.message); }
 }
 
@@ -2386,22 +2433,73 @@ async function remoteNodeDelete(id) {
   catch (error) { alert(error.message); }
 }
 
-async function importRemoteLinks(links) {
-  const result = await api('/import-node',jsonOpt('POST',{links:links.join('\n'),addToGroups:true}));
-  if (!result.added || result.failed?.length) throw Error(`导入 ${result.added || 0} 条；${result.failed?.map(x=>x.reason).join('；') || '未找到兼容节点'}`);
+async function importRemoteLinks(links, source) {
+  const result = source ? await api('/servers/import',jsonOpt('POST',{...source,bind:false})) : await api('/import-node',jsonOpt('POST',{links:links.join('\n'),addToGroups:true}));
+  if (!(result.added || result.existing) || result.failed?.length) throw Error(`导入 ${result.added || 0} 条；${result.failed?.map(x=>x.reason).join('；') || '未找到兼容节点'}`);
   await reload(false); notice(`已导入 ${result.added} 个节点到当前订阅`);
 }
 
 function remoteNodeLinks(id) {
   const row = S.remoteRows.find(x => x.id === id); if (!row) return;
-  openModal('远端节点分享链接', '<textarea id="remoteShare" readonly style="min-height:180px"></textarea><div class="toolbar" style="margin-top:14px"><button id="remoteCopy" class="btn">复制链接</button><button id="remoteImport" class="btn primary">导入当前订阅</button></div><div id="remoteImportError" class="error"></div>');
+  const serverId = S.serverId, profile = S.profile;
+  const enforced = !!S.data?.profile?.traffic?.enforce, single = row.shareLinks.length === 1 && !sharedRemoteInbound(row);
+  openModal('从服务器导入节点', `<form id="remoteImportForm"><p class="hint">选择需要导入当前订阅的连接。绑定限制以整个服务器入站为单位；多用户入站请只导入连接信息，另建专属入站用于强制限制。绑定后从当前计数开始累计，不自动计入历史流量，也不取消原面板已有的限额或有效期。</p>
+    <div class="checks">${row.shareLinks.map((link,i)=>`<label class="choice"><input type="checkbox" class="remoteImportChoice" value="${i}" checked><span>连接 ${i+1} · ${esc(link.split('://')[0])}</span></label>`).join('')}</div>
+    <details><summary>查看分享链接（含连接凭据）</summary><textarea id="remoteShare" readonly style="min-height:120px"></textarea><button type="button" id="remoteCopy" class="btn small">复制链接</button></details>
+    <label class="inlinecheck"><input id="remoteBindOnImport" type="checkbox" ${single && enforced ? 'checked' : ''} ${single ? '' : 'disabled'}>导入并绑定当前订阅，联动流量额度与到期时间</label>
+    <label id="remoteDedicatedBox" class="inlinecheck"><input id="remoteDedicated" type="checkbox">我确认整个入站仅供当前订阅使用，到期或超额可删除整个入站</label>
+    <p class="hint">${enforced ? '当前订阅已启用强制限制，未绑定的入站必须选择绑定后导入。' : '仅导入连接信息不会自动启用服务器限制。绑定后还需在“流量与有效期”设置额度、到期时间并启用强制限制。'}${single ? '' : '此入站包含多个用户或连接，当前导入流程不允许整组绑定。'}</p>
+    <div id="remoteImportError" class="error"></div><button id="remoteImport" class="btn primary">导入所选节点</button></form>`);
   $('remoteShare').value = row.shareLinks.join('\n');
   $('remoteCopy').onclick = () => copyText(row.shareLinks.join('\n'));
-  $('remoteImport').onclick = async () => {
-    $('remoteImport').disabled = true;
-    try { await importRemoteLinks(row.shareLinks); closeModal(); }
-    catch (error) { if ($('remoteImportError')) { $('remoteImportError').textContent=error.message; $('remoteImport').disabled=false; } }
+  const mode = () => { const bound = $('remoteBindOnImport').checked; $('remoteDedicatedBox').classList.toggle('hidden', !bound); $('remoteDedicated').required = bound; };
+  $('remoteBindOnImport').onchange = mode; mode();
+  $('remoteImportForm').onsubmit = async e => {
+    e.preventDefault(); const button = $('remoteImport'); button.disabled = true;
+    try {
+      if (S.profile !== profile) throw Error('当前订阅已切换，请重新打开导入窗口');
+      const indices = [...document.querySelectorAll('.remoteImportChoice:checked')].map(x=>Number(x.value));
+      const opt = jsonOpt('POST', {serverId,inboundId:id,indices,bind:$('remoteBindOnImport').checked,confirmedDedicated:$('remoteDedicated').checked});
+      opt.headers['X-Profile'] = profile;
+      const result = await api('/servers/import', opt);
+      closeModal();
+      if (S.profile === profile) { await reload(false); if (S.page === 'serverNodes') renderRemoteNodes(); }
+      notice(`已新增 ${result.added} 个，已有 ${result.existing} 个${result.bound ? '；已绑定订阅' : '；仅导入连接信息'}${result.bound && !result.enforcementEnabled ? '，请到流量与有效期启用强制限制' : ''}`);
+    } catch (error) { if ($('remoteImportError')) $('remoteImportError').textContent=error.message; }
+    finally { if (button?.isConnected) button.disabled=false; }
   };
+}
+
+function bandwidthLabel(value) {
+  const up = value?.uploadKbps || 0, down = value?.downloadKbps || 0;
+  return up || down ? `上行 ${up ? up/1000+' Mbps' : '不限'} / 下行 ${down ? down/1000+' Mbps' : '不限'} · 上次已应用` : '不限速';
+}
+
+function nodeBandwidthModal(encoded, id) {
+  const serverId = decodeURIComponent(encoded), profile = S.profile;
+  const binding = (S.data?.profile?.traffic?.bindings || []).find(b=>b.serverId===serverId && b.inboundId===id && b.status==='active');
+  if (!binding) return alert('请先把专属入站绑定当前订阅，再设置带宽限制');
+  const value = binding.bandwidth || {};
+  openModal('订阅节点带宽限制', `<form id="nodeBandwidthForm"><p>当前订阅：${esc(S.data.profile.name)}<br>专属入站：${esc(binding.name || '')} · ${esc(serverId)} / ${id} · 端口 ${esc(binding.port)}</p>
+    <div class="grid"><div><label for="bandwidthUpload">客户端上传上限（Mbps）</label><input id="bandwidthUpload" type="number" min="0.1" max="10000" step="0.001" value="${value.uploadKbps ? value.uploadKbps/1000 : ''}" placeholder="留空不限"></div>
+    <div><label for="bandwidthDownload">客户端下载上限（Mbps）</label><input id="bandwidthDownload" type="number" min="0.1" max="10000" step="0.001" value="${value.downloadKbps ? value.downloadKbps/1000 : ''}" placeholder="留空不限"></div></div>
+    <p class="hint">只限制这个专属入站，Mbps 与 MB/s 不同（8 Mbps 约为 1 MB/s）。需要服务器已安装 nftables、使用 systemd 且有 root 权限。超速流量会丢包，TCP 可能重传；允许短时突发，实际吞吐可能低于上限。独占端口，不支持共用入站内按单个用户分开限速。</p>
+    <div id="bandwidthError" class="error"></div><div class="toolbar"><button id="bandwidthSave" class="btn primary">应用到服务器</button><button id="bandwidthClear" type="button" class="btn">取消此节点限速</button></div></form>`);
+  const apply = async clear => {
+    const save = $('bandwidthSave'), remove = $('bandwidthClear');save.disabled=remove.disabled=true;
+    try {
+      if (S.profile !== profile) throw Error('订阅已切换，请重新打开设置');
+      const read = id => clear || !val(id) ? null : Number(val(id));
+      const options = jsonOpt('PUT',{serverId,inboundId:id,uploadMbps:read('bandwidthUpload'),downloadMbps:read('bandwidthDownload')});
+      options.headers['X-Profile'] = profile;
+      await api('/servers/bandwidth',options);closeModal();
+      if (S.profile === profile) {await reload(false);if(S.page==='traffic')traffic();else if(S.page==='serverNodes')renderRemoteNodes();}
+      notice(clear ? '已取消该节点限速' : '服务器带宽限制已应用');
+    } catch (error) {if($('bandwidthError'))$('bandwidthError').textContent=error.message;}
+    finally {if(save?.isConnected){save.disabled=false;remove.disabled=false;}}
+  };
+  $('nodeBandwidthForm').onsubmit=e=>{e.preventDefault();void apply(false);};
+  $('bandwidthClear').onclick=()=>apply(true);
 }
 
 function trafficSummary() {
@@ -2416,7 +2514,7 @@ function trafficSummary() {
       <div><span>剩余流量</span><strong>${formatBytes(t.remaining)}</strong></div>
       <div><span>到期时间</span><strong class="usage-date">${t.expire ? esc(new Date(t.expire * 1000).toLocaleString('zh-CN')) : '长期有效'}</strong></div>
     </div>${t.total != null ? `<progress class="usage-progress" max="100" value="${t.percent}" aria-label="流量已使用百分比"></progress><div class="hint">已用 ${t.percent}% · 上传 ${formatBytes(t.upload)} / 下载 ${formatBytes(t.download)}</div>` : ''}
-    <div class="hint">${t.enforce ? '服务器累计' : '手动录入'} · 最近更新 ${t.updatedAt ? esc(new Date(t.updatedAt * 1000).toLocaleString('zh-CN')) : '—'}</div>`
+    <div class="hint">计费倍率 ${esc(t.multiplier ?? 1)} 倍 · 服务器原始采集 ${formatBytes(t.rawUsed || 0)}（不含手工录入）</div><div class="hint">${t.enforce ? '服务器累计' : '手动录入'} · 最近更新 ${t.updatedAt ? esc(new Date(t.updatedAt * 1000).toLocaleString('zh-CN')) : '—'}</div>`
     : '<p class="muted">尚未设置流量额度和有效期。设置后，三个客户端订阅会使用同一份流量信息。</p>'}
   </section>`;
 }
@@ -2432,11 +2530,12 @@ function traffic() {
     <form id="trafficForm"><div class="grid">
       <div><label for="trafficUnit">流量单位</label><select id="trafficUnit"><option value="1073741824">GiB（1 GiB = 1024 MiB）</option><option value="1048576">MiB</option><option value="1099511627776">TiB</option></select></div>
       <div><label for="trafficTotal">总流量额度</label><input id="trafficTotal" type="number" min="0" step="any" placeholder="留空表示不限" value="${t.total != null ? t.total / unit : ''}"></div>
-      <div><label for="trafficUpload">已用上传流量</label><input id="trafficUpload" type="number" min="0" step="any" required value="${(t.upload || 0) / unit}"></div>
-      <div><label for="trafficDownload">已用下载流量</label><input id="trafficDownload" type="number" min="0" step="any" required value="${(t.download || 0) / unit}"></div>
+      <div><label for="trafficUpload">已用上传计费流量</label><input id="trafficUpload" type="number" min="0" step="any" required value="${(t.upload || 0) / unit}"></div>
+      <div><label for="trafficDownload">已用下载计费流量</label><input id="trafficDownload" type="number" min="0" step="any" required value="${(t.download || 0) / unit}"></div>
+      <div class="span2"><label for="trafficMultiplier">流量计费倍率</label><input id="trafficMultiplier" type="number" min="0" max="100" step="0.001" required value="${t.multiplier ?? 1}"><p class="hint">例如 2 倍：实际采集 1 GiB，订阅扣除 2 GiB。只影响新采集的用量，不重算历史账单；0 倍不扣流量，到期限制仍有效。修改倍率前会先结算原倍率用量。自动计量需启用服务器强制限制并绑定专属入站。</p></div>
       <div class="span2"><label for="trafficExpire">到期时间（当前设备本地时间）</label><input id="trafficExpire" type="datetime-local" step="1" value="${dateValue}"><p class="hint">留空表示长期有效；已用流量为上传与下载之和。客户端是否显示额度取决于其版本。</p></div>
     </div><label class="inlinecheck"><input id="trafficEnforce" type="checkbox" ${t.enforce || !t.configured ? 'checked' : ''}>启用服务器强制限制（会删除本订阅专属入站）</label><p class="hint">独立 Xray / sing-box 启用计量前需在远端安装 nftables。计量包含网络协议开销；阈值存在巡检延迟，离线服务器的撤销会持续重试。请勿把其他用户共用入站绑定到此订阅。</p><div class="toolbar"><button id="trafficSync" class="btn" type="button">立即同步用量 / 重试撤销</button></div>
-    <div class="tablewrap"><table><thead><tr><th>专属入站</th><th>服务器 / ID</th><th>状态</th><th>错误</th></tr></thead><tbody>${(t.bindings || []).map(b => `<tr><td>${esc(b.name || '')} : ${b.port}</td><td>${esc(b.serverId)} / ${b.inboundId}</td><td>${esc(b.status)}</td><td>${esc(b.error || '')}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚未绑定服务器入站，请到服务器节点创建或绑定专属入站</td></tr>'}</tbody></table></div>${t.enforcementError ? `<p class="error">${esc(t.enforcementError)}</p>` : ''}
+    <div class="tablewrap"><table><thead><tr><th>专属入站</th><th>服务器 / ID</th><th>状态 / 限速</th><th>操作 / 错误</th></tr></thead><tbody>${(t.bindings || []).map(b => `<tr><td>${esc(b.name || '')} : ${b.port}</td><td>${esc(b.serverId)} / ${b.inboundId}</td><td>${esc(b.status)}<div class="hint">${bandwidthLabel(b.bandwidth)}</div></td><td><button type="button" class="btn small" onclick="nodeBandwidthModal('${encodeURIComponent(b.serverId).replace(/'/g,'%27')}',${b.inboundId})" ${b.status !== 'active' ? 'disabled' : ''}>节点带宽限制</button><div class="error">${esc(b.error || '')}</div></td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚未绑定服务器入站，请到服务器节点创建或绑定专属入站</td></tr>'}</tbody></table></div>${t.enforcementError ? `<p class="error">${esc(t.enforcementError)}</p>` : ''}
     <div id="trafficError" class="error" role="alert"></div><div class="toolbar">
       <button id="trafficSave" class="btn primary" type="submit">保存并同步订阅信息</button>
       <button id="trafficDisable" class="btn" type="button" ${!t.configured ? 'disabled' : ''}>关闭限制与信息展示</button>
@@ -2483,10 +2582,13 @@ function traffic() {
       };
       const expire = $('trafficExpire').value ? new Date($('trafficExpire').value).getTime() / 1000 : null;
       if (expire !== null && (!Number.isSafeInteger(expire) || expire <= 0)) throw Error('请选择有效的到期时间');
-      void save({ enabled: true, enforce: $('trafficEnforce').checked, upload: bytes('trafficUpload'), download: bytes('trafficDownload'), total: bytes('trafficTotal'), expire });
+      const upload = bytes('trafficUpload'), download = bytes('trafficDownload'), multiplier = Number(val('trafficMultiplier'));
+      if (!Number.isFinite(multiplier) || multiplier < 0 || multiplier > 100) throw Error('流量倍率须为 0–100');
+      void save({ enabled: true, enforce: $('trafficEnforce').checked, upload, download, total: bytes('trafficTotal'), expire, multiplier,
+        preserveUsage: upload === (t.upload || 0) && download === (t.download || 0) });
     } catch (error) { $('trafficError').textContent = error.message; }
   };
-  $('trafficDisable').onclick = () => { if (confirm('关闭该订阅的服务器强制限制及流量信息展示？已删除节点不会恢复。')) void save({ enabled: false }); };
+  $('trafficDisable').onclick = () => { if (confirm('关闭该订阅的额度、有效期限制及流量信息展示？节点带宽限制仍保留，已删除节点不会恢复。')) void save({ enabled: false }); };
 }
 
 function cards() {
@@ -2587,6 +2689,9 @@ function nodes() {
   <section class="panel">
     <div class="toolbar">
       <input id="search" placeholder="> 搜索节点名称、协议类型、服务器地址..." value="${esc(q)}">
+      <button type="button" class="btn small primary" onclick="chooseNodeServer('create')">选择服务器创建节点</button>
+      <button type="button" class="btn small" onclick="chooseNodeServer('browse')">从服务器导入节点</button>
+      <button type="button" class="btn small" onclick="go('traffic')">订阅流量与有效期</button>
       <button type="button" class="btn small" onclick="selectAllNodes()">全选全部</button>
       <button type="button" class="btn small" onclick="clearNodeSelection()">取消选择</button>
       <button type="button" class="btn small primary" onclick="autoAddCountryFlags()">🌐 自动添加国旗</button>

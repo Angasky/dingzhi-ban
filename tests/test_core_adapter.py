@@ -48,6 +48,44 @@ class CoreAdapterTests(unittest.TestCase):
         self.manager.execute = Mock(side_effect=execute)
         return self.manager.record(self.identity)
 
+    def test_attach_existing_cores_only_reads_and_validates(self):
+        for kind in ('xray', 'sing-box'):
+            with self.subTest(kind=kind):
+                record = self.initialize(kind)
+                saved = self.manager.save({'id': self.identity, 'name': kind, 'host': record['host'],
+                    'sshUser': 'root', 'fingerprint': record['fingerprint'], 'installType': kind,
+                    'connectionMode': 'existing'})
+                before = copy.deepcopy(self.native)
+                result = self.manager.attach_existing(self.identity)
+                with patch('remote_manager.threading.Thread') as worker:
+                    with self.assertRaisesRegex(ValueError, '不会执行安装'):
+                        self.manager.start_install(self.identity, True)
+                worker.assert_not_called()
+                self.assertTrue(result['server']['existingVerifiedAt'])
+                self.assertIn('验证成功', result['message'])
+                self.assertEqual(self.native, before)
+                self.assertEqual(self.manager.secret(self.manager.record(self.identity), 'panelPassword'), '')
+                self.assertTrue(any('systemctl is-active --quiet ' + kind in cmd for cmd in self.scripts))
+                for cmd in self.scripts:
+                    for forbidden in ('restart', 'curl ', 'printf ', 'mv ', 'cp '):
+                        self.assertNotIn(forbidden, cmd)
+                self.manager.remove(self.identity)
+                self.scripts.clear()
+
+    def test_existing_core_validation_failure_never_marks_verified_or_installs(self):
+        record = self.initialize('xray')
+        self.manager.save({'id': self.identity, 'name': 'xray', 'host': record['host'],
+            'sshUser': 'root', 'fingerprint': record['fingerprint'], 'installType': 'xray',
+            'connectionMode': 'existing'})
+        self.fail_apply = True
+        with self.assertRaisesRegex(ValueError, '已有 xray 验证失败'):
+            self.manager.attach_existing(self.identity)
+        self.assertFalse(self.manager.record(self.identity).get('existingVerifiedAt'))
+        with self.assertRaisesRegex(ValueError, '请勿提交安装用 JSON'):
+            self.manager.save({'id': self.identity, 'name': 'xray', 'host': record['host'],
+                'sshUser': 'root', 'fingerprint': record['fingerprint'], 'installType': 'xray',
+                'connectionMode': 'existing', 'coreConfig': '{"inbounds":[],"outbounds":[]}'})
+
     def test_templates_and_relay_preserve_unmanaged_configuration(self):
         for kind in ('xray', 'sing-box'):
             with self.subTest(kind=kind):

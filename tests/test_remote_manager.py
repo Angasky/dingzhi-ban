@@ -277,6 +277,44 @@ class RemoteManagerTests(unittest.TestCase):
         self.assertEqual(api.configuration, original)
         self.assertEqual(api.rows, [])
 
+    def test_full_panel_address_is_parsed_used_and_preserved(self):
+        address = 'https://panel.example.com:13145/riben/'
+        saved = self.manager.save({**self.payload, 'id': self.identity, 'installType': 'x-panel',
+                                   'connectionMode': 'existing', 'panelAddress': address})
+        self.assertEqual(saved['panelAddress'], address)
+        record = copy.deepcopy(self.manager.record(self.identity))
+        with patch.object(self.manager, 'execute', return_value=(1, 'no api token')) as execute:
+            api = self.manager.panel(Mock(), record)
+        self.assertEqual(api.record['panelPort'], 13145)
+        self.assertEqual(api.record['panelPath'], '/riben/')
+        self.assertTrue(api.record['panelTLS'])
+        self.assertEqual(api.record['panelUrl'], address)
+        self.assertEqual(execute.call_count, 1)
+        self.assertIn('getApiToken', execute.call_args.args[2])
+        self.assertNotIn('-show true', execute.call_args.args[2])
+        self.assertEqual(self.manager.public(self.manager.record(self.identity))['panelAddress'], address)
+        self.manager.save({**self.payload, 'id': self.identity, 'installType':'x-panel',
+                           'connectionMode':'existing', 'panelAddress':''})
+        self.assertNotIn('panelAddress', self.manager.record(self.identity))
+
+    def test_panel_address_validation_and_default_ports(self):
+        for url, port, path in [('https://panel.example.com',443,'/'),
+                                ('http://198.51.100.1/admin',80,'/admin/'),
+                                ('https://[2001:db8::1]:8443/a/',8443,'/a/')]:
+            with self.subTest(url=url):
+                result = remote.parse_panel_address(url)
+                self.assertEqual(result['panelPort'],port)
+                self.assertEqual(result['panelPath'],path)
+        for url in ['panel.example.com', 'ftp://panel.example.com', 'https://user:pass@panel.example.com/',
+                    'https://panel.example.com:0/', 'https://panel.example.com:65536/',
+                    'https://panel.example.com/a?token=secret', 'https://panel.example.com/a#section',
+                    'https://panel.example.com/%2e%2e/', 'https://panel.example.com/%0d%0a/',
+                    'https://panel.example.com/%zz/', 'https://panel.example.com/a b/']:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                remote.parse_panel_address(url)
+        with self.assertRaisesRegex(ValueError, '仅用于接入'):
+            self.manager.save({**self.payload, 'panelAddress':'https://panel.example.com/'})
+
     def test_attach_existing_preserves_password_and_never_installs(self):
         saved = self.manager.save({**self.payload, "id": self.identity,
                                    "connectionMode": "existing", "panelUser": "a", "panelPassword": "old"})
@@ -334,8 +372,10 @@ class PanelTunnelTests(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
 
+        observed = []
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
+                observed.append((self.path, self.headers.get('Host')))
                 body = b'{"success":true,"obj":[{"id":1}]}'
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
@@ -365,6 +405,11 @@ class PanelTunnelTests(unittest.TestCase):
             try:
                 api = remote.PanelAPI(ssh, {"host":"198.51.100.1", "domain":"panel.example.com", "panelPort":2053, "panelPath":"/secret/", "panelTLS":True}, "token")
                 self.assertEqual(api.request("panel/api/inbounds/list"), [{"id":1}])
+                supplied = remote.parse_panel_address('https://panel.example.com:13145/riben/')
+                api = remote.PanelAPI(ssh, {"host":"198.51.100.1", "domain":"", "panelAddress":supplied['panelUrl'], **supplied}, "token")
+                self.assertEqual(api.request("panel/api/inbounds/list"), [{"id":1}])
+                self.assertEqual(transport.open_channel.call_args.args[1], ('127.0.0.1',13145))
+                self.assertEqual(observed[-1], ('/riben/panel/api/inbounds/list', 'panel.example.com:13145'))
             finally:
                 httpd.shutdown()
                 httpd.server_close()

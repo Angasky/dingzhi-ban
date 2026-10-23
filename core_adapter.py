@@ -145,7 +145,7 @@ class CoreAPI:
         self.binary = '/usr/local/bin/xray' if self.kind == 'xray' else '/usr/bin/sing-box'
         code, output = manager.execute(ssh, record, 'base64 < ' + self.path, timeout=30, max_output=2 * 1024 * 1024)
         if code:
-            raise ValueError('无法读取内核配置，请先安装内核')
+            raise ValueError(f'无法读取内核配置 {self.path}，请检查安装位置及 SSH 提权权限')
         try:
             self.native = json.loads(base64.b64decode(output))
         except (ValueError, TypeError) as exc:

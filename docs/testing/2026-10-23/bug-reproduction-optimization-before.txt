@@ -1,0 +1,26 @@
+test_limited_node_cannot_switch_tcp_to_udp_transport (test_workflow_regressions.BandwidthWorkflowRegressions.test_limited_node_cannot_switch_tcp_to_udp_transport) ... ok
+test_panel_meter_does_not_open_an_unused_ssh_connection (test_workflow_regressions.BandwidthWorkflowRegressions.test_panel_meter_does_not_open_an_unused_ssh_connection) ... FAIL
+test_repeated_delete_of_missing_node_does_not_call_panel_delete (test_workflow_regressions.BandwidthWorkflowRegressions.test_repeated_delete_of_missing_node_does_not_call_panel_delete) ... ok
+test_disconnect_failure_keeps_retrying_after_inbound_is_gone (test_workflow_regressions.QuotaWorkflowRegressions.test_disconnect_failure_keeps_retrying_after_inbound_is_gone) ... ok
+test_history_does_not_receive_live_counters_or_revocation (test_workflow_regressions.QuotaWorkflowRegressions.test_history_does_not_receive_live_counters_or_revocation) ... ok
+test_invalid_quota_is_rejected_before_remote_changes_or_settlement (test_workflow_regressions.QuotaWorkflowRegressions.test_invalid_quota_is_rejected_before_remote_changes_or_settlement) ... ok
+test_json_body_must_be_object (test_workflow_regressions.RequestBodyRegressions.test_json_body_must_be_object) ... ok
+test_negative_content_length_is_rejected_before_read (test_workflow_regressions.RequestBodyRegressions.test_negative_content_length_is_rejected_before_read) ... ok
+
+======================================================================
+FAIL: test_panel_meter_does_not_open_an_unused_ssh_connection (test_workflow_regressions.BandwidthWorkflowRegressions.test_panel_meter_does_not_open_an_unused_ssh_connection)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/mxioc-vpn-manager/tests/test_workflow_regressions.py", line 67, in test_panel_meter_does_not_open_an_unused_ssh_connection
+    connect.assert_not_called()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 910, in assert_not_called
+    raise AssertionError(msg)
+AssertionError: Expected 'connect' to not have been called. Called 1 times.
+Calls: [call({'id': '409afbe659dc25bebdb9428e', 'createdAt': 1792724954, 'connectionMode': 'install', 'installType': '3x-ui', 'host': '198.51.100.20', 'sshPort': 22, 'name': '入口服务器', 'sshUser': 'root', 'domain': '', 'panelUser': 'manager', 'fingerprint': 'SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'sshPassword': '<temporary-test-ciphertext>', 'panelPassword': '<temporary-test-ciphertext>'}),
+ call().__bool__(),
+ call().close()].
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.011s
+
+FAILED (failures=1)

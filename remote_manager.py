@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit, quote, unquote
 
 INSTALL_URL = "https://raw.githubusercontent.com/Teminuosi/3x-ui/main/install.sh"
 MAX_LOG = 64 * 1024
@@ -63,6 +63,39 @@ def valid_domain(value):
     ):
         raise ValueError("域名只填写主机名，例如 panel.example.com，不包含协议、端口或路径")
     return value
+
+
+def parse_panel_address(value):
+    value = text(value, "面板完整地址", maximum=2048).strip()
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) or "\\" in value:
+        raise ValueError("面板地址不能含空白、控制字符或反斜线")
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            raise ValueError()
+        port = valid_port(parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80))
+    except ValueError as exc:
+        raise ValueError("请填写完整面板地址，例如 https://panel.example.com:13145/riben/，不要在地址中包含账号密码") from exc
+    if parsed.query or parsed.fragment:
+        raise ValueError("面板地址只填写协议、主机、端口和访问路径，不包含查询参数或片段")
+    try:
+        host = str(ipaddress.ip_address(parsed.hostname))
+        if "%" in host:
+            raise ValueError("不支持带区域标识的面板地址")
+    except ValueError:
+        host = valid_domain(parsed.hostname)
+    path = parsed.path or "/"
+    decoded = unquote(path)
+    if (any(ord(c) < 32 or ord(c) == 127 for c in decoded) or "\\" in decoded
+            or any(segment in (".", "..") for segment in decoded.split("/"))
+            or re.search(r"%(?![0-9a-fA-F]{2})", path)):
+        raise ValueError("面板访问路径包含无效字符或上级路径")
+    path = quote(path, safe="/%:@!$&'()*+,;=-._~").rstrip("/") + "/"
+    authority = f"[{host}]" if ":" in host else host
+    if parsed.port is not None:
+        authority += f":{port}"
+    return {"panelPort": port, "panelPath": path, "panelTLS": parsed.scheme == "https",
+            "panelUrl": urlunsplit((parsed.scheme, authority, path, "", ""))}
 
 
 def text(value, name, minimum=1, maximum=256):
@@ -305,10 +338,10 @@ class PanelAPI:
                 context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
-                client = context.wrap_socket(client, server_hostname=self.record.get("domain") or self.record["host"])
+                client = context.wrap_socket(client, server_hostname=(urlsplit(self.record["panelAddress"]).hostname if self.record.get("panelAddress") else self.record.get("domain") or self.record["host"]))
             connection.sock = client
             headers = {"X-Requested-With": "XMLHttpRequest", "Connection": "close"}
-            hostname = self.record.get("domain") or self.record["host"]
+            hostname = urlsplit(self.record["panelAddress"]).hostname if self.record.get("panelAddress") else self.record.get("domain") or self.record["host"]
             headers["Host"] = (f"[{hostname}]" if ":" in hostname else hostname) + ":" + str(self.record["panelPort"])
             if self.cookies:
                 headers["Cookie"] = "; ".join(f"{key}={value}" for key, value in self.cookies.items())
@@ -417,7 +450,7 @@ class RemoteManager:
 
     def public(self, record):
         keys = ("id", "name", "host", "sshPort", "sshUser", "fingerprint", "domain", "panelUser",
-                "panelUrl", "panelPort", "panelPath", "panelTLS", "createdAt", "lastError", "connectionMode", "existingVerifiedAt")
+                "panelAddress", "panelUrl", "panelPort", "panelPath", "panelTLS", "createdAt", "lastError", "connectionMode", "existingVerifiedAt")
         result = {key: record.get(key) for key in keys}
         result["installType"] = install_type(record)
         result["hasCoreConfig"] = bool(record.get("coreConfig"))
@@ -444,16 +477,28 @@ class RemoteManager:
             record["connectionMode"] = payload.get("connectionMode", record.get("connectionMode", "install"))
             if record["connectionMode"] not in ("install", "existing"):
                 raise ValueError("服务器接入模式无效")
+            if existing and existing.get("bandwidths"):
+                if (str(payload.get("host", existing["host"])) != existing["host"]
+                        or int(payload.get("sshPort", existing["sshPort"])) != existing["sshPort"]
+                        or payload.get("installType", install_type(existing)) != install_type(existing)):
+                    raise ValueError("服务器仍有节点限速，请先取消限速再修改地址或内核类型")
             previous_type = install_type(record)
             record["installType"] = payload.get("installType", previous_type)
             kind = install_type(record)
             if kind in ("x-ui", "x-panel") and record["connectionMode"] != "existing":
                 raise ValueError("X-ui / X-Panel 请使用接入现有面板模式，不运行交互式第三方安装器")
-            if record["connectionMode"] == "existing" and kind not in PANEL_TYPES:
-                raise ValueError("现有面板接入仅支持 X-ui / 3x-ui")
             if kind != previous_type:
-                for key in ("panelUrl", "panelPort", "panelPath", "panelTLS", "managed", "lastXrayBackup", "coreConfig", "coreState", "meters", "relays"):
+                for key in ("panelAddress", "panelUrl", "panelPort", "panelPath", "panelTLS", "managed", "lastXrayBackup", "coreConfig", "coreState", "meters", "bandwidths", "relays"):
                     record.pop(key, None)
+            panel_address = payload.get("panelAddress", record.get("panelAddress", ""))
+            if panel_address:
+                if record["connectionMode"] != "existing" or kind not in PANEL_TYPES:
+                    raise ValueError("面板完整地址仅用于接入已安装的面板")
+                settings = parse_panel_address(panel_address)
+                record.update(settings)
+                record["panelAddress"] = settings["panelUrl"]
+            else:
+                record.pop("panelAddress", None)
             if kind not in PANEL_TYPES:
                 if payload.get("domain"):
                     raise ValueError("独立内核的域名和 TLS 请在内核 JSON 配置中设置")
@@ -461,6 +506,8 @@ class RemoteManager:
                 if not isinstance(raw, str) or len(raw.encode()) > 128 * 1024:
                     raise ValueError("内核配置必须是 128 KB 以内的 JSON")
                 if raw.strip():
+                    if record["connectionMode"] == "existing":
+                        raise ValueError("接入已有内核时读取远端现有配置，请勿提交安装用 JSON 配置")
                     try:
                         config = json.loads(raw)
                     except ValueError as exc:
@@ -507,7 +554,8 @@ class RemoteManager:
 
     def remove(self, server_id):
         with self.lock:
-            self.record(server_id)
+            if self.record(server_id).get("bandwidths"):
+                raise ValueError("服务器仍有节点限速，请先取消限速再移除服务器")
             if self.server_locks.get(server_id, threading.Lock()).locked():
                 raise ValueError("该服务器正在处理节点操作，请稍后移除")
             if any(j["serverId"] == server_id and j["status"] == "running" for j in self.data["jobs"]):
@@ -617,10 +665,13 @@ echo '=== DNS ==='
         if install_type(record) not in PANEL_TYPES:
             from core_adapter import CoreAPI
             return CoreAPI(self, ssh, record)
-        code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -show true && { ./x-ui setting -getCert true 2>/dev/null || true; }", timeout=30)
-        if code:
-            raise ValueError("未能读取 /usr/local/x-ui 面板设置，请检查安装位置、版本兼容性及 SSH 提权权限")
-        settings = parse_panel_settings(output, record)
+        if record.get("connectionMode") == "existing" and record.get("panelAddress"):
+            settings = parse_panel_address(record["panelAddress"])
+        else:
+            code, output = self.execute(ssh, record, "cd /usr/local/x-ui && ./x-ui setting -show true && { ./x-ui setting -getCert true 2>/dev/null || true; }", timeout=30)
+            if code:
+                raise ValueError("未能读取 /usr/local/x-ui 面板设置，请检查安装位置、版本兼容性及 SSH 提权权限")
+            settings = parse_panel_settings(output, record)
         with self.lock:
             self.record(record["id"]).update(settings)
             self.flush()
@@ -636,6 +687,19 @@ echo '=== DNS ==='
 
     def attach_existing(self, server_id):
         def action(api, record):
+            kind = install_type(record)
+            if kind not in PANEL_TYPES:
+                check = "run -test -config" if kind == "xray" else "check -c"
+                script = f"{api.binary} version && {api.binary} {check} {api.path} && systemctl is-active --quiet {kind}"
+                code, output = self.execute(api.ssh, record, script, timeout=30)
+                if code:
+                    raise ValueError(f"已有 {kind} 验证失败，请检查内核程序、配置 {api.path} 和 systemd 服务：{output[-2000:]}")
+                rows = api.request("panel/api/inbounds/list")
+                with self.lock:
+                    self.record(server_id)["existingVerifiedAt"] = int(time.time())
+                    self.flush()
+                return {"server": self.public(self.record(server_id)),
+                        "message": f"已有 {kind} 验证成功，发现 {len(api.native.get('inbounds', []))} 个原生入站、{len(rows)} 个总控受管入站；未安装、重启或修改远端配置。原生未受管入站不会自动导入"}
             api.request("login", {"username": record["panelUser"],
                                    "password": self.secret(record, "panelPassword")}, bearer=False)
             rows = api.request("panel/api/inbounds/list")
@@ -671,7 +735,7 @@ echo '=== DNS ==='
         with self.lock:
             record = copy.deepcopy(self.record(server_id))
             if record.get("connectionMode") == "existing":
-                raise ValueError("现有面板接入模式不会执行安装或更新脚本")
+                raise ValueError("已有软件接入模式不会执行安装或更新脚本")
             self.secret(record, "sshPassword")
             self.secret(record, "panelPassword")
             if self.server_locks.get(server_id, threading.Lock()).locked():
@@ -822,12 +886,53 @@ echo '=== DNS ==='
         finally:
             ssh.close()
 
+    def _write_bandwidth(self, api, record, policies):
+        from bandwidth import apply_script
+        code, output = self.execute(api.ssh, record, apply_script(policies), timeout=45)
+        if code:
+            raise ValueError("服务器限速应用失败，请检查 nftables、systemd 和 root 权限；已有规则会尝试恢复：" + output[-1000:])
+        with self.lock:
+            self.record(record["id"])["bandwidths"] = copy.deepcopy(policies)
+            try:
+                self.flush()
+            except Exception as exc:
+                raise ValueError("远端限速已应用，但总控记录保存失败，请重试以同步状态") from exc
+        record["bandwidths"] = copy.deepcopy(policies)
+
+    def set_bandwidth(self, server_id, inbound_id, upload_kbps, download_kbps):
+        from bandwidth import policy
+        inbound_id = positive_id(inbound_id)
+        def action(api, record):
+            policies = copy.deepcopy(record.get("bandwidths", {}))
+            if upload_kbps or download_kbps:
+                rows = api.request("panel/api/inbounds/list") or []
+                row = next((r for r in rows if r["id"] == inbound_id), None)
+                if not row:
+                    raise ValueError("待限速的入站不存在")
+                settings = json_object(row.get("settings") or {})
+                if len(settings.get("clients", [])) > 1:
+                    raise ValueError("共用入站不能按单个用户限速，请创建专属入站")
+                configured = policy(row, upload_kbps, download_kbps)
+                if any(r["id"] != inbound_id and r.get("port") == row["port"] for r in rows):
+                    raise ValueError("该端口有其他入站使用，不能对单个节点实施端口限速")
+                if 'tcp' in configured['protocols'] and configured['port'] in (record['sshPort'], record.get('panelPort')):
+                    raise ValueError("节点端口与 SSH 或面板管理端口重合，不能应用限速")
+                policies[str(inbound_id)] = configured
+            else:
+                configured = {"uploadKbps": 0, "downloadKbps": 0}
+                policies.pop(str(inbound_id), None)
+            self._write_bandwidth(api, record, policies)
+            return {**configured, "appliedAt": int(time.time()), "mode": "policing"}
+        return self.with_panel(server_id, action)
+
     def ensure_meter(self, server_id, inbound_id):
         """Explicitly provision host counters before accepting a metered binding."""
         inbound_id = positive_id(inbound_id)
-        def action(api, record):
-            if install_type(record) in PANEL_TYPES:
+        # Panels already expose native counters; no remote setup or SSH is needed.
+        with self.lock:
+            if install_type(self.record(server_id)) in PANEL_TYPES:
                 return
+        def action(api, record):
             row = next((r for r in api.request("panel/api/inbounds/list") if r["id"] == inbound_id), None)
             if not row:
                 raise ValueError("入站不存在")
@@ -956,6 +1061,14 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
         body = prepare_inbound(payload)
 
         def action(api, record):
+            if str(inbound_id) in record.get("bandwidths", {}):
+                old = api.request(f"panel/api/inbounds/get/{inbound_id}")
+                if any(body.get(key) != old.get(key) for key in ("port", "listen", "protocol")):
+                    raise ValueError("该节点已限速，修改端口、监听地址或协议前请先取消限速")
+                from bandwidth import policy
+                limited = record["bandwidths"][str(inbound_id)]
+                if policy(body, limited["uploadKbps"], limited["downloadKbps"])["protocols"] != limited["protocols"]:
+                    raise ValueError("该节点已限速，切换 TCP / UDP 传输前请先取消限速")
             if any(x["inboundId"] == inbound_id for x in record.get("relays", [])):
                 old = api.request(f"panel/api/inbounds/get/{inbound_id}")
                 if any(body.get(key) != old.get(key) for key in ("port", "listen", "protocol")):
@@ -966,10 +1079,11 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
     def delete_inbound(self, server_id, inbound_id):
         inbound_id = positive_id(inbound_id)
 
-        def action(api, record):
+        def remove(api, record, missing=False):
             managed = next((x for x in record.get("relays", []) if x["inboundId"] == inbound_id), None)
             if not managed:
-                api.request(f"panel/api/inbounds/del/{inbound_id}", {})
+                if not missing:
+                    api.request(f"panel/api/inbounds/del/{inbound_id}", {})
                 return {"deleted": True}
             original, wrapper = read_xray(api)
             changed = copy.deepcopy(original)
@@ -979,7 +1093,8 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
             self.backup_xray(server_id, original)
             try:
                 write_xray(api, changed, wrapper)
-                api.request(f"panel/api/inbounds/del/{inbound_id}", {})
+                if not missing:
+                    api.request(f"panel/api/inbounds/del/{inbound_id}", {})
             except Exception:
                 write_xray(api, original, wrapper)
                 raise
@@ -987,6 +1102,25 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
                 self.record(server_id)["relays"] = [x for x in record.get("relays", []) if x["inboundId"] != inbound_id]
                 self.flush()
             return {"deleted": True}
+        def action(api, record):
+            previous = copy.deepcopy(record.get("bandwidths", {}))
+            rows = api.request("panel/api/inbounds/list") or []
+            missing = not any(r["id"] == inbound_id for r in rows)
+            if str(inbound_id) not in previous:
+                return remove(api, record, missing)
+            changed = copy.deepcopy(previous)
+            changed.pop(str(inbound_id))
+            # If clearing fails, leave the inbound and its old policy in place.
+            self._write_bandwidth(api, record, changed)
+            try:
+                return remove(api, record, missing)
+            except Exception as exc:
+                if not missing:
+                    try:
+                        self._write_bandwidth(api, record, previous)
+                    except Exception as restore:
+                        raise ValueError(f"删除失败且限速恢复失败，请重新应用限速：{restore}") from exc
+                raise
         return self.with_panel(server_id, action)
 
     def backup_xray(self, server_id, configuration):

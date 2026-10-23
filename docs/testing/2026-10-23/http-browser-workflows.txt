@@ -1,0 +1,10 @@
+test_creation_import_multiplier_bandwidth_exhaustion_and_renewal (test_end_to_end.EndToEndTests.test_creation_import_multiplier_bandwidth_exhaustion_and_renewal) ... ok
+test_csrf_validation_logout_and_persisted_cookie (test_end_to_end.EndToEndTests.test_csrf_validation_logout_and_persisted_cookie) ... ok
+test_expiry_removes_remote_node_and_bandwidth (test_end_to_end.EndToEndTests.test_expiry_removes_remote_node_and_bandwidth) ... ok
+test_real_browser_quota_and_bandwidth_forms (test_end_to_end.EndToEndTests.test_real_browser_quota_and_bandwidth_forms) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 7.348s
+
+OK
+PASS real browser/API: cookie login, 3 theme quota edits, bandwidth apply/clear, reload session, logout

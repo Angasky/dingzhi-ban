@@ -1,0 +1,8 @@
+{
+  "nodes": 1000,
+  "rules": 10000,
+  "iterations": 30,
+  "median_ms": 30.45,
+  "p95_ms": 42.21,
+  "operation": "node PUT alternating port, includes backup and atomic file replacement"
+}
