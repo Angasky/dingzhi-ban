@@ -362,6 +362,16 @@ class RemoteManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             remote.prepare_inbound({"protocol": "vless", "port": 443, "settings": "[]"})
 
+    def test_template_default_port_is_random_high_and_reality_target_is_current(self):
+        api=FakeAPI()
+        ports=set()
+        for _ in range(12):
+            body=remote.build_inbound(api, {'remark':'random','template':'vless-reality'})
+            self.assertGreater(body['port'],20000);self.assertLessEqual(body['port'],65535)
+            ports.add(body['port'])
+            self.assertEqual(json.loads(body['streamSettings'])['realitySettings']['target'],'raw.githubusercontent.com:443')
+        self.assertGreater(len(ports),1)
+
 
 class PanelTunnelTests(unittest.TestCase):
     def test_https_loopback_inside_ssh_tunnel_supports_panel_certificate(self):

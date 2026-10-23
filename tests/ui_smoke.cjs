@@ -57,12 +57,15 @@ t.setApi(async(path,opt)=>{requests.push([path,opt]);if(path==='/servers')return
  const foButton=$('failoverForm').querySelector('button.primary');await $('failoverForm').onsubmit({preventDefault(){},submitter:foButton});
  const fo=JSON.parse(requests.find(r=>r[0]==='/failovers' && r[1]?.method==='POST')[1].body);assert.deepEqual(fo.entries,['entry','backup']);assert.equal(fo.exit,'exit');assert.equal(fo.interval,30);assert(!foButton.disabled);
  t.S.remoteServer={installType:'sing-box'};t.S.serverId='native';t.remoteNodeForm(false);assert([...$('rnTemplate').options].some(o=>o.value==='hysteria2'));
+ assert(Number($('rnPort').value)>20000 && Number($('rnPort').value)<=65535);
  $('rnTemplate').value='tuic';$('rnTemplate').onchange();assert(!$('rnTlsFields').classList.contains('hidden'));
  $('rnName').value='tuic-test';$('rnCert').value='/etc/cert.pem';$('rnKey').value='/etc/key.pem';await $('remoteNodeForm').onsubmit({preventDefault(){}});
  const node=JSON.parse(requests.find(r=>r[0]==='/servers/inbounds')[1].body);assert.equal(node.template,'tuic');assert.equal(node.certFile,'/etc/cert.pem');
  t.setApi(async(path,opt)=>({results:JSON.parse(opt.body).candidates.map(domain=>({domain,ok:true,latencyMs:20,tls:'TLSv1.3',alpn:'h2'}))}));
  assert(t.sniCandidates().length>=60);assert($('rnSniTest'));assert(!$('rnSniList'));
  t.S.profile='clash';t.S.page='nodes';t.S.profiles=[{id:'clash',name:'test'}];
+ t.setApi(async(path)=>{assert.equal(path,'/servers','creation picker must not contact inbounds');return {servers:t.S.servers};});
+ await t.chooseNodeServer('create');await $('pickerOpen').onclick();assert($('remoteNodeForm'));assert(!$('pickerError'));
  const remote={id:7,port:24443,enable:true,protocol:'shadowsocks',remark:'dedicated',shareLinks:['ss://server-source#dedicated']};
  t.setApi(async(path,opt)=>{
   requests.push([path,opt]);

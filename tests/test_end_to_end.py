@@ -110,6 +110,21 @@ class EndToEndTests(unittest.TestCase):
         self.request('PUT','/traffic',{'enforce':True,'total':2000,'upload':1000,'download':0,'multiplier':2})
         self.assertFalse(self.api.rows, 'renewal must not recreate credentials silently')
 
+    def test_recreated_dedicated_endpoint_refreshes_old_named_node(self):
+        identity,inbound=self.add_server_and_node()
+        original=copy.deepcopy(server.read_config())
+        # A newly owned inbound replaces an expired instance on the same endpoint.
+        server.profile_record()['remoteNodes'][0]['status']='revoked'
+        self.api.rows[0]['enable']=False
+        created,_=self.request('POST','/servers/inbounds',{'serverId':identity,'template':'shadowsocks','port':24443,'remark':'专属测试节点'})
+        result,_=self.request('POST','/servers/import',{'serverId':identity,'inboundId':created['inbound']['id'],'indices':[0]})
+        self.assertEqual(result['updated'],1)
+        doc=server.read_config()
+        self.assertEqual(len(doc['proxies']),1)
+        self.assertEqual(doc['proxies'][0]['name'],original['proxies'][0]['name'])
+        self.assertNotEqual(doc['proxies'][0]['password'],original['proxies'][0]['password'])
+        self.assertEqual(doc['proxy-groups'],original['proxy-groups'])
+
     def test_expiry_removes_remote_node_and_bandwidth(self):
         identity, inbound = self.add_server_and_node()
         self.request('PUT','/servers/bandwidth',{'serverId':identity,'inboundId':inbound,'downloadMbps':3})

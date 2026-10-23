@@ -752,11 +752,23 @@ def import_server_inbound(payload):
                     return json.dumps({k:v for k,v in node.items() if k != "name"}, sort_keys=True, ensure_ascii=False)
                 existing = {identity(n):n["name"] for n in nodes}
                 used = {n["name"] for n in nodes} | {g["name"] for g in doc.get("proxy-groups", [])} | BUILTINS
-                names, added = [], []
+                names, added, updated = [], [], []
                 for node in parsed:
                     key = identity(node)
                     if key in existing:
                         names.append(existing[key])
+                        continue
+                    # Recreating a dedicated inbound on the same endpoint must
+                    # refresh its old named entry, not leave a dead primary node.
+                    previous = next((i for i, old in enumerate(nodes) if own and len(parsed) == 1
+                                     and old.get("name") == node.get("name")
+                                     and all(old.get(k) == node.get(k) for k in ("server", "port", "type"))
+                                     and not old.get("dialer-proxy")), None)
+                    if previous is not None:
+                        require_dedicated_inbound(row)
+                        nodes[previous] = node
+                        existing[key] = node["name"]
+                        names.append(node["name"]); updated.append(node["name"])
                         continue
                     node["name"] = unique_node_name(str(node.get("name") or "服务器节点"), used)
                     used.add(node["name"])
@@ -765,9 +777,12 @@ def import_server_inbound(payload):
                     existing[key] = node["name"]
                     names.append(node["name"])
                     added.append(node["name"])
-                if added:
+                if added or updated:
                     write_config(doc, "server-inbound-import")
-            return {"added": len(added), "existing": len(names)-len(added), "names": names,
+                if own:
+                    own["importedNames"] = names
+                    save_profiles(load_profiles())
+            return {"added": len(added), "updated": len(updated), "existing": len(names)-len(added), "names": names,
                     "bound": bool(own), "enforcementEnabled": bool((record.get("traffic") or {}).get("enforce"))}
         except Exception as exc:
             if own:

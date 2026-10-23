@@ -1110,10 +1110,49 @@ print(json.dumps(sorted(rows, key=lambda x: x.get('latencyMs', 1e9))))
         try:
             code, raw = self.execute(ssh, record, "python3 - <<'MXIOC_SNI'\n" + probe.replace('CANDIDATES', encoded) + "\nMXIOC_SNI", timeout=40)
             if code:
-                raise ValueError("SNI 测试失败，目标服务器需要 Python 3 和可用的系统 CA")
+                return self.test_sni_curl(ssh, record, domains)
             return {"results": json.loads(raw)}
         finally:
             ssh.close()
+
+    def test_sni_curl(self, ssh, record, domains):
+        """Python-free fallback. Resolve on the server, validate and pin public IPs."""
+        import concurrent.futures
+        resolver = "command -v curl >/dev/null && command -v getent >/dev/null || exit 12\n"
+        for domain in domains:
+            resolver += "getent ahosts " + shlex.quote(domain) + " | awk -v host=" + shlex.quote(domain) + " '{print host, $1}'\n"
+        code, raw = self.execute(ssh, record, resolver, timeout=25)
+        if code:
+            raise ValueError("无 Python 扫描需要 curl、getent 和系统 CA；请安装系统网络工具后重试")
+        addresses = {name: set() for name in domains}
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in addresses:
+                try:
+                    addresses[parts[0]].add(ipaddress.ip_address(parts[1]))
+                except ValueError:
+                    pass
+        def probe(domain):
+            result = {"domain": domain, "ok": False, "method": "curl"}
+            values = addresses[domain]
+            if not values or any(not address.is_global for address in values):
+                result["error"] = "目标未解析到公网地址或解析含非公网地址"
+                return result
+            address = str(sorted(values, key=lambda a: (a.version, int(a)))[0])
+            pinned = '[' + address + ']' if ':' in address else address
+            command = "curl --disable --silent --show-error --head --output /dev/null --noproxy '*' --proto '=https' --tlsv1.3 --tls-max 1.3 --connect-timeout 4 --max-time 6 --resolve " + shlex.quote(domain + ':443:' + pinned) + " --write-out '%{time_appconnect}' " + shlex.quote('https://' + domain + '/')
+            try:
+                code, output = self.execute(ssh, record, command, timeout=10)
+                if code:
+                    result["error"] = "TLS 1.3 握手或证书校验失败：" + output[:160]
+                else:
+                    result.update(ok=True, tls="TLSv1.3", latencyMs=round(float(output.strip()) * 1000, 1))
+            except Exception as exc:
+                result["error"] = str(exc)[:160]
+            return result
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            rows = list(pool.map(probe, domains))
+        return {"results": sorted(rows, key=lambda row: row.get("latencyMs", 1e9)), "method": "curl"}
 
     def create_inbound(self, server_id, payload):
         def action(api, record):
@@ -1273,14 +1312,15 @@ def prepare_inbound(payload):
 
 
 def build_inbound(api, payload):
-    port = valid_port(payload.get("port"))
+    supplied_port = payload.get("port")
+    port = valid_port(20001 + secrets.randbelow(45535) if supplied_port in (None, "") else supplied_port)
     remark = text(payload.get("remark", "新建节点"), "节点名称", maximum=100)
     template = payload.get("template", "vless-reality")
     client = {"id": str(uuid.uuid4()), "email": "mxioc-" + secrets.token_hex(6), "enable": True,
               "totalGB": 0, "expiryTime": 0, "limitIp": 0, "subId": secrets.token_hex(8), "reset": 0, "tgId": ""}
     stream = {"network": "tcp", "security": "none", "tcpSettings": {"header": {"type": "none"}}}
     if template == "vless-reality":
-        sni = valid_domain(payload.get("serverName", "www.microsoft.com"))
+        sni = valid_domain(payload.get("serverName", "raw.githubusercontent.com"))
         if not sni:
             raise ValueError("Reality 需要填写伪装域名")
         keys = api.request("panel/api/server/getNewX25519Cert")

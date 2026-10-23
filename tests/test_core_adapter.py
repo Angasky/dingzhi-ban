@@ -182,6 +182,24 @@ class CoreAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.test_sni(self.identity, ['example.com; id'])
 
+    def test_sni_without_python_uses_validated_pinned_curl(self):
+        self.initialize('xray')
+        calls=[]
+        def execute(ssh, record, script, **kwargs):
+            calls.append(script)
+            if 'MXIOC_SNI' in script:return 127,'python3: not found'
+            if 'getent ahosts' in script:return 0,'public.example.com 8.8.8.8\nprivate.example.com 127.0.0.1\n'
+            self.assertIn('--resolve public.example.com:443:8.8.8.8',script)
+            self.assertIn('--tlsv1.3 --tls-max 1.3',script)
+            self.assertNotIn('--insecure',script)
+            self.assertNotIn('private.example.com',script)
+            return 0,'0.123'
+        self.manager.execute=Mock(side_effect=execute)
+        result=self.manager.test_sni(self.identity,['public.example.com','private.example.com'])
+        self.assertEqual(result['method'],'curl')
+        self.assertEqual(result['results'][0]['latencyMs'],123)
+        self.assertFalse(result['results'][1]['ok'])
+
 
 if __name__ == '__main__':
     unittest.main()
