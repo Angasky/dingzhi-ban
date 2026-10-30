@@ -135,14 +135,17 @@ def host_metrics(identity):
 
 BUILTINS = {"DIRECT", "REJECT", "REJECT-DROP", "PASS"}
 NON_NODE_GROUPS = {"🛑 广告拦截", "🛡️ 基础广告拦截", "🔥 强力广告拦截"}
-SUPPORTED_NODE_TYPES = {"vless", "tuic", "hysteria2", "trojan", "ss", "vmess", "socks5", "http"}
+SUPPORTED_NODE_TYPES = {"vless", "tuic", "hysteria2", "trojan", "ss", "vmess", "socks5", "http", "snell"}
+# A node supported by the Mihomo subscription is not necessarily supported by
+# Xray or Shadowrocket. Keep their existing export compatibility explicit.
+CLIENT_LINK_TYPES = SUPPORTED_NODE_TYPES - {"snell"}
 CONVERSION_FORMATS = {
     "v2rayn": {
-        "name": "电脑 v2rayN 节点订阅", "types": SUPPORTED_NODE_TYPES,
+        "name": "电脑 v2rayN 节点订阅", "types": CLIENT_LINK_TYPES,
         "note": "新版 v2rayN；独立信息节点显示流量和剩余时间，更新订阅刷新。信息节点不可连接；TUIC/Hysteria2 需支持的内核。",
     },
     "v2rayng": {
-        "name": "安卓 v2rayNG 节点订阅", "types": SUPPORTED_NODE_TYPES - {"tuic"},
+        "name": "安卓 v2rayNG 节点订阅", "types": CLIENT_LINK_TYPES - {"tuic"},
         "note": "新版 v2rayNG；提供标准流量和到期响应头，过滤不支持的 TUIC。节点列表不含主备逻辑。",
     },
     "v2rayn-ha": {
@@ -156,7 +159,7 @@ CONVERSION_FORMATS = {
         "note": "新版 v2rayNG 自定义 JSON 订阅；每个主备组一份完整 Xray 配置，不与普通节点订阅混用。端口需与 App 的本地 SOCKS 设置一致（默认 10808）。",
     },
     "shadowrocket-ha": {
-        "name": "小火箭主备 · 第一步：节点订阅", "types": SUPPORTED_NODE_TYPES, "kind": "shadowrocket-nodes",
+        "name": "小火箭主备 · 第一步：节点订阅", "types": CLIENT_LINK_TYPES, "kind": "shadowrocket-nodes",
         "note": "添加到首页订阅。仅包含受管主备组的转发路径，名称与第二步策略配置对应；流量与到期信息随订阅更新。",
     },
     "shadowrocket-config": {
@@ -165,12 +168,12 @@ CONVERSION_FORMATS = {
     },
     "v2ray": {
         "name": "V2Ray 通用节点订阅（兼容旧链接）",
-        "types": SUPPORTED_NODE_TYPES,
+        "types": CLIENT_LINK_TYPES,
         "note": "适合新版 v2rayN；旧版 V2Ray/v2rayNG 可能不支持 TUIC、Hysteria2 或 Reality。",
     },
     "shadowrocket": {
         "name": "Shadowrocket（小火箭）订阅",
-        "types": SUPPORTED_NODE_TYPES,
+        "types": CLIENT_LINK_TYPES,
         "note": "适合新版 Shadowrocket；旧版本可能无法识别 TUIC、Hysteria2 或 Reality。",
     },
 }
@@ -1899,6 +1902,8 @@ def validate_config(doc):
     for node in proxies:
         if not node.get("type") or not node.get("server") or not node.get("port"):
             raise ValueError(f"节点 {node.get('name', '?')} 缺少 type、server 或 port")
+        if node.get("type") == "snell":
+            validate_node_config(node)
         dialer = node.get("dialer-proxy")
         if dialer and dialer not in known:
             raise ValueError(f"链式节点 {node.get('name', '?')} 引用了不存在的前置中转：{dialer}")
@@ -2093,7 +2098,7 @@ def normalize_ipv6_authority(link):
 
 
 SHARE_LINK_PATTERN = re.compile(
-    r"(?i)(?:vless|tuic|hysteria2|hy2|trojan|ss|vmess|socks5|socks|https?)://[^\s<>]+"
+    r"(?i)(?:snell|vless|tuic|hysteria2|hy2|trojan|ss|vmess|socks5|socks|https?)://[^\s<>]+"
 )
 
 
@@ -2104,6 +2109,9 @@ def extract_node_links(value):
         raise ValueError("请至少粘贴一条节点链接")
     links = []
     for line in text.splitlines():
+        if re.match(r'^\s*[^=\r\n]+\s*=\s*snell\s*,', line, re.I):
+            links.append(line.strip())
+            continue
         for link in SHARE_LINK_PATTERN.findall(line.strip().strip("`")):
             # A link copied from Markdown may retain the closing parenthesis or punctuation.
             links.append(link.rstrip("，；;。]}>)]\"'"))
@@ -2114,9 +2122,15 @@ def extract_node_links(value):
 
 def parse_node_link(link):
     link = str(link or "").strip().strip('"\'').replace("\\://", "://").replace("\\@", "@").replace("\\.", ".")
+    if re.match(r'^[^=\r\n]+\s*=\s*snell\s*,', link, re.I):
+        from snell_adapter import parse_policy
+        return validate_node_config(parse_policy(link))
     if not link or "://" not in link:
         raise ValueError("请输入完整的节点链接")
     scheme = link.split("://", 1)[0].lower()
+    if scheme == "snell":
+        from snell_adapter import parse
+        return validate_node_config(parse(link))
     if scheme == "hy2":
         link = "hysteria2://" + link.split("://", 1)[1]
         scheme = "hysteria2"
@@ -2393,14 +2407,14 @@ def parse_subscription_text(text):
                 skipped.append(str(node.get("name") or "信息不完整的节点"))
                 continue
             try:
-                nodes.append(normalize_reality_options(node))
+                nodes.append(validate_node_config(node) if node_type == "snell" else normalize_reality_options(node))
             except ValueError as error:
                 skipped.append(f"{node.get('name', '未知节点')}（{error}）")
         return nodes, skipped
-    candidates = [text]
+    candidates = text.splitlines()
     try:
         decoded = b64decode_text(text)
-        if "://" in decoded:
+        if "://" in decoded or re.search(r'=\s*snell\s*,', decoded, re.I):
             candidates = decoded.splitlines()
     except Exception:
         if "\n" in text:
@@ -2409,10 +2423,15 @@ def parse_subscription_text(text):
         line = line.strip()
         if not line:
             continue
+        if line.lower() == '[proxy]':
+            continue
         try:
             nodes.append(parse_node_link(line))
         except Exception:
-            skipped.append(line.split("#", 1)[-1][:80] if "#" in line else "无法识别的节点")
+            if line.lower().startswith('snell://') or re.match(r'^[^=\r\n]+\s*=\s*snell\s*,', line, re.I):
+                skipped.append("无法识别的 Snell 节点（参数无效）")
+            else:
+                skipped.append(line.split("#", 1)[-1][:80] if "#" in line else "无法识别的节点")
     if not nodes:
         raise ValueError("订阅中没有找到可导入的 Clash 或分享链接节点")
     return nodes, skipped
@@ -2527,6 +2546,9 @@ def add_transport_query(node, query):
 
 def node_to_uri(node):
     node_type = str(node.get("type", "")).lower()
+    if node_type == "snell":
+        from snell_adapter import to_uri
+        return to_uri(validate_node_config(node))
     name = quote(str(node.get("name", "节点")), safe="")
     address = endpoint(node)
     query = {}
@@ -2714,7 +2736,7 @@ def conversion_report(profile_id=None):
             if node.get("dialer-proxy"):
                 reason = "链式代理无法用单节点分享链接表达"
             elif str(node.get("type", "")).lower() not in info["types"]:
-                reason = "客户端不支持该协议"
+                reason = "本导出格式未适配 Snell，请使用完整 Mihomo 订阅" if node.get("type") == "snell" else "客户端不支持该协议"
             if reason:
                 skipped.append({"name": node.get("name", "未知节点"), "type": node.get("type", ""), "reason": reason})
             else:
@@ -3013,6 +3035,9 @@ def validate_node_config(config):
     if kind not in SUPPORTED_NODE_TYPES:
         raise ValueError("暂不支持该节点协议")
     node["type"], node["port"] = kind, valid_port(node.get("port"))
+    if kind == "snell":
+        from snell_adapter import validate as validate_snell
+        node = validate_snell(node)
     name = str(node.get("name") or "").strip()
     if not name or len(name) > 200 or any(c in name for c in "\r\n\0"):
         raise ValueError("节点名称须为 1–200 字符且不能含换行")
